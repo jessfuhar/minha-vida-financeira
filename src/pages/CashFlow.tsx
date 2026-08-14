@@ -1,9 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Card, CardTitle } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Select } from '../components/ui/FormField'
+import { SearchInput } from '../components/ui/SearchInput'
+import { MonthYearSelector } from '../components/ui/MonthYearSelector'
 import { CashFlowChart } from '../components/charts/CashFlowChart'
 import { TransactionsTable } from '../components/transactions/TransactionsTable'
 import { TransactionFormModal, type TransactionFormValues } from '../components/transactions/TransactionFormModal'
@@ -19,14 +22,17 @@ import { StatTile } from '../components/ui/StatTile'
 import { useToast } from '../components/ui/Toast'
 import { useConfirm } from '../components/ui/Confirm'
 import { useData } from '../context/DataContext'
-import { monthlyCashFlowSeries, dailyCashFlowSeries, monthKey, monthLabel, todayIso } from '../lib/aggregations'
+import { usePeriod } from '../context/PeriodContext'
+import { monthlyCashFlowSeries, dailyCashFlowSeries, monthKey, monthTotals, todayIso } from '../lib/aggregations'
 import { formatCurrency, parseCurrencyInput } from '../lib/format'
 import { useSelection } from '../lib/useSelection'
 import { groupByNormalizedCounterparty } from '../lib/importRules'
 import { findTransferCandidates } from '../lib/transferDetection'
 import { detectDuplicates } from '../lib/importDedup'
+import { matchesQuery, transactionSearchFields } from '../lib/textSearch'
+import { sortTransactions, useTransactionSort } from '../lib/sorting'
 import { accountTypeLabel } from '../components/accounts/AccountCard'
-import { TrendingUp, TrendingDown, Scale, Plus, ArrowLeftRight, Upload, Repeat, Search as SearchIcon } from 'lucide-react'
+import { TrendingUp, TrendingDown, Scale, Plus, ArrowLeftRight, Upload, Repeat } from 'lucide-react'
 import type { Transaction } from '../db/models'
 import type { ParsedStatementRow } from '../lib/importParsers'
 import type { TransactionDirection } from '../data/types'
@@ -42,7 +48,6 @@ export default function CashFlow() {
     transactions,
     costCenters,
     classificationRules,
-    monthSummary,
     addTransaction,
     updateTransaction,
     deleteTransaction,
@@ -58,11 +63,12 @@ export default function CashFlow() {
     registerRuleUsage,
     updateAccount,
   } = useData()
+  const { period: selectedPeriod, label: periodLabel, setPeriod } = usePeriod()
   const toast = useToast()
   const confirm = useConfirm()
   const selection = useSelection()
 
-  const [period, setPeriod] = useState<(typeof periods)[number]['id']>('mensal')
+  const [chartPeriod, setChartPeriod] = useState<(typeof periods)[number]['id']>('mensal')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [newTransactionPrefill, setNewTransactionPrefill] = useState<Partial<TransactionFormValues> | null>(null)
@@ -74,26 +80,34 @@ export default function CashFlow() {
   const [bulkModal, setBulkModal] = useState<'categoria' | 'centroDeCusto' | 'conta' | 'status' | null>(null)
 
   const [filterAccount, setFilterAccount] = useState('')
-  const [filterMonth, setFilterMonth] = useState('')
+  const [search, setSearch] = useState('')
+  const sort = useTransactionSort()
 
-  const data = period === 'mensal' ? monthlyCashFlowSeries(accounts, transactions) : dailyCashFlowSeries(accounts, transactions)
+  const data = chartPeriod === 'mensal' ? monthlyCashFlowSeries(accounts, transactions) : dailyCashFlowSeries(accounts, transactions)
 
-  const monthOptions = useMemo(() => {
-    const keys = Array.from(new Set(transactions.map((t) => monthKey(t.date)))).sort().reverse()
-    return keys.map((k) => ({ key: k, label: monthLabel(k) }))
-  }, [transactions])
+  // Cards (Entradas/Saídas/Resultado) usam SEMPRE a data do lançamento (nunca createdAt/importação)
+  // e o mesmo período mensal escolhido no seletor global — reaproveita `monthTotals`, que já trata
+  // lançamentos manuais e importados igualmente e já exclui transferências entre contas próprias.
+  const periodTotals = useMemo(() => monthTotals(transactions, selectedPeriod), [transactions, selectedPeriod])
+  const periodResultado = periodTotals.entradas - periodTotals.saidas
 
-  const sortedTransactions = useMemo(
-    () => [...transactions].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt.localeCompare(a.createdAt))),
-    [transactions],
-  )
+  // A tabela usa o MESMO período dos cards acima, mais o filtro de conta e a pesquisa — nunca um
+  // período diferente do selecionado globalmente.
+  const periodTransactions = useMemo(() => transactions.filter((t) => monthKey(t.date) === selectedPeriod), [transactions, selectedPeriod])
 
   const filteredTransactions = useMemo(
     () =>
-      sortedTransactions.filter(
-        (t) => (!filterAccount || t.accountId === filterAccount) && (!filterMonth || monthKey(t.date) === filterMonth),
+      periodTransactions.filter(
+        (t) =>
+          (!filterAccount || t.accountId === filterAccount) &&
+          matchesQuery(transactionSearchFields(t, costCenters, accounts), search),
       ),
-    [sortedTransactions, filterAccount, filterMonth],
+    [periodTransactions, filterAccount, search, costCenters, accounts],
+  )
+
+  const sortedTransactions = useMemo(
+    () => sortTransactions(filteredTransactions, sort.sortKey, sort.sortDir, costCenters),
+    [filteredTransactions, sort.sortKey, sort.sortDir, costCenters],
   )
 
   const selectedTransactions = useMemo(
@@ -111,6 +125,19 @@ export default function CashFlow() {
     setNewTransactionPrefill(null)
     setModalOpen(true)
   }
+
+  // Permite chegar aqui a partir de um resultado clicável da busca geral (/buscar), já abrindo o
+  // lançamento correspondente para edição — sem navegação quebrada.
+  const location = useLocation()
+  const navigate = useNavigate()
+  useEffect(() => {
+    const targetId = (location.state as { openTransactionId?: string } | null)?.openTransactionId
+    if (!targetId) return
+    const tx = transactions.find((t) => t.id === targetId)
+    if (tx) openEdit(tx)
+    navigate(location.pathname, { replace: true, state: null })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state])
 
   /** Abre o formulário existente de lançamento já preenchido a partir de uma "possível movimentação"
    * de PDF que não foi reconhecida automaticamente — reaproveita a mesma dedicação/lógica de
@@ -245,6 +272,10 @@ export default function CashFlow() {
       })),
     )
     toast.show(`${rows.length} lançamento${rows.length === 1 ? '' : 's'} importado${rows.length === 1 ? '' : 's'}.`)
+    // Depois de confirmar a importação, muda o período selecionado para o mês do primeiro
+    // lançamento importado — assim a usuária vê imediatamente o que acabou de importar, em vez de
+    // continuar olhando para um mês (ex.: o mês atual) onde nada apareceria.
+    if (created.length > 0) setPeriod(monthKey(created[0].date))
     return created
   }
 
@@ -335,6 +366,7 @@ export default function CashFlow() {
         subtitle="Acompanhe entradas, saídas e a evolução do seu saldo ao longo do tempo."
         action={
           <div className="flex flex-wrap items-center gap-2">
+            <MonthYearSelector />
             <Button variant="secondary" onClick={() => setImportOpen(true)}>
               <Upload size={16} /> Importar extrato
             </Button>
@@ -349,13 +381,13 @@ export default function CashFlow() {
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatTile label="Entradas do mês" value={formatCurrency(monthSummary.entradas)} icon={TrendingUp} accent="var(--color-cat-teal)" />
-        <StatTile label="Saídas do mês" value={formatCurrency(monthSummary.saidas)} icon={TrendingDown} accent="var(--color-cat-rose)" />
+        <StatTile label={`Entradas · ${periodLabel}`} value={formatCurrency(periodTotals.entradas)} icon={TrendingUp} accent="var(--color-cat-teal)" />
+        <StatTile label={`Saídas · ${periodLabel}`} value={formatCurrency(periodTotals.saidas)} icon={TrendingDown} accent="var(--color-cat-rose)" />
         <StatTile
-          label="Resultado do mês"
-          value={formatCurrency(monthSummary.resultado)}
+          label={`Resultado · ${periodLabel}`}
+          value={formatCurrency(periodResultado)}
           icon={Scale}
-          accent={monthSummary.resultado >= 0 ? 'var(--color-status-good)' : 'var(--color-status-critical)'}
+          accent={periodResultado >= 0 ? 'var(--color-status-good)' : 'var(--color-status-critical)'}
         />
       </div>
 
@@ -366,10 +398,10 @@ export default function CashFlow() {
               {periods.map((p) => (
                 <button
                   key={p.id}
-                  onClick={() => setPeriod(p.id)}
+                  onClick={() => setChartPeriod(p.id)}
                   className={[
                     'rounded-full px-3 py-1.5 text-[12.5px] font-medium transition-colors',
-                    period === p.id ? 'bg-white text-rose-800 shadow-sm' : 'text-neutral-500 hover:text-neutral-700',
+                    chartPeriod === p.id ? 'bg-white text-rose-800 shadow-sm' : 'text-neutral-500 hover:text-neutral-700',
                   ].join(' ')}
                 >
                   {p.label}
@@ -380,6 +412,10 @@ export default function CashFlow() {
         >
           Entradas, saídas e saldo acumulado
         </CardTitle>
+        <p className="-mt-3 mb-4 text-[12px] text-neutral-400">
+          Este gráfico mostra uma janela de tendência ({chartPeriod === 'mensal' ? 'últimos 6 meses' : 'últimos 6 dias'}), independente do
+          período selecionado acima — os cards e a tabela abaixo mostram especificamente {periodLabel}.
+        </p>
         {transactions.length === 0 ? (
           <EmptyState
             icon={ArrowLeftRight}
@@ -395,10 +431,15 @@ export default function CashFlow() {
 
       <Card padded={false}>
         <div className="flex flex-wrap items-center justify-between gap-3 p-5 pb-0 lg:px-6">
-          <CardTitle>Todos os lançamentos</CardTitle>
+          <CardTitle>Lançamentos · {periodLabel}</CardTitle>
           {transactions.length > 0 && (
             <div className="mb-4 flex flex-wrap items-center gap-2">
-              <SearchIcon size={14} className="text-neutral-300" />
+              <SearchInput
+                placeholder="Pesquisar lançamentos..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="!w-[220px] !py-1.5 !text-[12.5px]"
+              />
               <Select value={filterAccount} onChange={(e) => setFilterAccount(e.target.value)} className="!w-auto !py-1.5 !text-[12.5px]">
                 <option value="">Todas as contas</option>
                 {accounts.map((acc) => (
@@ -407,19 +448,20 @@ export default function CashFlow() {
                   </option>
                 ))}
               </Select>
-              <Select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="!w-auto !py-1.5 !text-[12.5px]">
-                <option value="">Todos os meses</option>
-                {monthOptions.map((m) => (
-                  <option key={m.key} value={m.key}>
-                    {m.label}
-                  </option>
-                ))}
-              </Select>
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="rounded-full px-2.5 py-1.5 text-[12.5px] font-medium text-rose-700 hover:underline"
+                >
+                  Limpar
+                </button>
+              )}
             </div>
           )}
         </div>
         <div className="p-5 pt-0 lg:p-6 lg:pt-0">
-          {sortedTransactions.length === 0 ? (
+          {transactions.length === 0 ? (
             <EmptyState
               icon={ArrowLeftRight}
               title="Nenhum lançamento cadastrado"
@@ -427,17 +469,26 @@ export default function CashFlow() {
               actionLabel="+ Novo lançamento"
               onAction={openNew}
             />
-          ) : filteredTransactions.length === 0 ? (
-            <p className="py-10 text-center text-[14px] text-neutral-500">Nenhum lançamento nesse filtro.</p>
+          ) : sortedTransactions.length === 0 ? (
+            <p className="py-10 text-center text-[14px] text-neutral-500">
+              {search ? (
+                <>Nenhum resultado encontrado para "{search}" em {periodLabel}.</>
+              ) : (
+                <>Nenhum lançamento em {periodLabel} com esse filtro.</>
+              )}
+            </p>
           ) : (
             <TransactionsTable
-              transactions={filteredTransactions}
+              transactions={sortedTransactions}
               costCenters={costCenters}
               onEdit={openEdit}
               onDelete={handleDelete}
               selectable
               selectedIds={selection.selected}
               onToggleOne={selection.toggle}
+              sortKey={sort.sortKey}
+              sortDir={sort.sortDir}
+              onSortChange={sort.onSortChange}
               onToggleAll={selection.toggleAll}
             />
           )}

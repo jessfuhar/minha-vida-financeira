@@ -4,6 +4,21 @@ import { isInternalTransferKind } from './transactionKind'
 
 const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
+const MONTH_LABELS_LONG = [
+  'Janeiro',
+  'Fevereiro',
+  'Março',
+  'Abril',
+  'Maio',
+  'Junho',
+  'Julho',
+  'Agosto',
+  'Setembro',
+  'Outubro',
+  'Novembro',
+  'Dezembro',
+]
+
 export function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
 }
@@ -19,6 +34,14 @@ export function yearKey(dateIso: string): string {
 export function monthLabel(key: string): string {
   const [year, month] = key.split('-').map(Number)
   return `${MONTH_LABELS[month - 1]}/${year}`
+}
+
+/** Nome do mês por extenso + ano — ex.: "Janeiro 2026". Usado no seletor global de período
+ * (Fluxo de Caixa / Centros de Custo / Relatórios), onde o enunciado pede explicitamente esse
+ * formato ("← Janeiro 2026 →"), diferente do rótulo abreviado usado nos gráficos de tendência. */
+export function monthLabelLong(key: string): string {
+  const [year, month] = key.split('-').map(Number)
+  return `${MONTH_LABELS_LONG[month - 1]} ${year}`
 }
 
 export function shiftMonthKey(key: string, delta: number): string {
@@ -205,6 +228,15 @@ export function categorySpendInMonth(
         t.categoryId === categoryId &&
         !isInternalTransferKind(t.kind),
     )
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+  return { total: items.reduce((s, t) => s + t.amount, 0), count: items.length, items }
+}
+
+/** Saídas de um centro de custo inteiro (todas as categorias + sem categoria) num mês específico —
+ * mesma forma de `categorySpendInMonth`, para reaproveitar nos cards e no modal de Centro de Custo. */
+export function costCenterSpendInMonth(transactions: Transaction[], costCenterId: string, key: string): CategorySpend {
+  const items = transactions
+    .filter((t) => t.direction === 'saida' && monthKey(t.date) === key && t.costCenterId === costCenterId && !isInternalTransferKind(t.kind))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
   return { total: items.reduce((s, t) => s + t.amount, 0), count: items.length, items }
 }

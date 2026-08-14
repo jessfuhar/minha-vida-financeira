@@ -1,9 +1,10 @@
-import { Pencil, Trash2, ArrowLeftRight } from 'lucide-react'
+import { Pencil, Trash2, ArrowLeftRight, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react'
 import type { Transaction, CostCenter } from '../../db/models'
 import { formatCurrencySigned, formatDate } from '../../lib/format'
 import { TransactionTypeBadge } from './TransactionTypeBadge'
 import { TransactionStatusPill } from '../ui/StatusPill'
 import { transactionKindMeta } from '../../lib/transactionKind'
+import type { TransactionSortKey, SortDir } from '../../lib/sorting'
 
 interface TransactionsTableProps {
   transactions: Transaction[]
@@ -17,6 +18,45 @@ interface TransactionsTableProps {
   selectedIds?: Set<string>
   onToggleOne?: (id: string) => void
   onToggleAll?: (ids: string[], checked: boolean) => void
+  /** Ordenação (opcional) — quando `onSortChange` é passado, os cabeçalhos de Data/Descrição/Valor/
+   * Categoria/Centro de custo viram botões clicáveis com indicador visual de qual ordenação está
+   * ativa. A ordenação em si (sobre o conjunto já filtrado) é feita por quem chama este componente,
+   * com `sortTransactions` de `lib/sorting` — a tabela só exibe o estado atual. */
+  sortKey?: TransactionSortKey
+  sortDir?: SortDir
+  onSortChange?: (key: TransactionSortKey) => void
+}
+
+function SortableHeader({
+  label,
+  columnKey,
+  sortKey,
+  sortDir,
+  onSortChange,
+  className = '',
+}: {
+  label: string
+  columnKey: TransactionSortKey
+  sortKey?: TransactionSortKey
+  sortDir?: SortDir
+  onSortChange?: (key: TransactionSortKey) => void
+  className?: string
+}) {
+  if (!onSortChange) return <th className={className}>{label}</th>
+  const isActive = sortKey === columnKey
+  return (
+    <th className={className}>
+      <button
+        type="button"
+        onClick={() => onSortChange(columnKey)}
+        className={['inline-flex items-center gap-1 transition-colors hover:text-rose-700', isActive ? 'text-rose-700' : ''].join(' ')}
+        aria-label={`Ordenar por ${label}${isActive ? (sortDir === 'asc' ? ', crescente' : ', decrescente') : ''}`}
+      >
+        {label}
+        {isActive ? sortDir === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} /> : <ArrowUpDown size={10} className="text-neutral-300" />}
+      </button>
+    </th>
+  )
 }
 
 export function resolveCostCenterName(costCenters: CostCenter[], costCenterId: string | null): string {
@@ -40,6 +80,9 @@ export function TransactionsTable({
   selectedIds,
   onToggleOne,
   onToggleAll,
+  sortKey,
+  sortDir,
+  onSortChange,
 }: TransactionsTableProps) {
   if (transactions.length === 0) {
     return <p className="py-10 text-center text-[14px] text-neutral-500">{emptyMessage}</p>
@@ -64,12 +107,33 @@ export function TransactionsTable({
                 />
               </th>
             )}
-            <th className="pb-3 pr-4 font-medium">Data</th>
-            <th className="pb-3 pr-4 font-medium">Descrição</th>
+            <SortableHeader label="Data" columnKey="date" sortKey={sortKey} sortDir={sortDir} onSortChange={onSortChange} className="pb-3 pr-4 font-medium" />
+            <SortableHeader
+              label="Descrição"
+              columnKey="description"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSortChange={onSortChange}
+              className="pb-3 pr-4 font-medium"
+            />
             <th className="pb-3 pr-4 font-medium">Tipo</th>
-            <th className="pb-3 pr-4 font-medium">Valor</th>
-            <th className="pb-3 pr-4 font-medium">Centro de custo</th>
-            <th className="pb-3 pr-4 font-medium">Categoria</th>
+            <SortableHeader label="Valor" columnKey="amount" sortKey={sortKey} sortDir={sortDir} onSortChange={onSortChange} className="pb-3 pr-4 font-medium" />
+            <SortableHeader
+              label="Centro de custo"
+              columnKey="centroDeCusto"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSortChange={onSortChange}
+              className="pb-3 pr-4 font-medium"
+            />
+            <SortableHeader
+              label="Categoria"
+              columnKey="categoria"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSortChange={onSortChange}
+              className="pb-3 pr-4 font-medium"
+            />
             <th className="pb-3 font-medium">Status</th>
             {showActions && <th className="pb-3 pl-4 font-medium">Ações</th>}
           </tr>

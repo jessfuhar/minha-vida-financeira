@@ -1,24 +1,31 @@
+import { useMemo } from 'react'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Card, CardTitle } from '../components/ui/Card'
 import { StatTile } from '../components/ui/StatTile'
 import { EmptyState } from '../components/ui/EmptyState'
+import { MonthYearSelector } from '../components/ui/MonthYearSelector'
 import { MagnitudeBarChart, blueSequential } from '../components/charts/MagnitudeBarChart'
 import { MonthlyComparisonChart } from '../components/charts/MonthlyComparisonChart'
 import { BalanceEvolutionChart } from '../components/charts/BalanceEvolutionChart'
 import { useData } from '../context/DataContext'
-import { monthlyCashFlowSeries, monthKey, todayIso } from '../lib/aggregations'
+import { usePeriod } from '../context/PeriodContext'
+import { monthlyCashFlowSeries, monthKey, monthTotals } from '../lib/aggregations'
 import { formatCurrency } from '../lib/format'
 import { isInternalTransferKind } from '../lib/transactionKind'
 import { TrendingUp, TrendingDown, Scale, Wallet, PieChart } from 'lucide-react'
 
 export default function Reports() {
-  const { accounts, transactions, costCenters, totalBalance, monthSummary } = useData()
+  const { accounts, transactions, costCenters, totalBalance } = useData()
+  const { period: currentMonth, label: periodLabel } = usePeriod()
 
-  const currentMonth = monthKey(todayIso())
-  // Transferências entre contas próprias nunca entram em relatórios de gasto — o dinheiro só mudou de conta.
+  // Os relatórios mensais usam SEMPRE o período selecionado no seletor global (mesmo do Fluxo de
+  // Caixa e Centros de Custo) — nunca "o mês atual" fixo. Transferências entre contas próprias
+  // nunca entram em relatórios de gasto — o dinheiro só mudou de conta.
   const monthTx = transactions.filter(
     (t) => monthKey(t.date) === currentMonth && t.direction === 'saida' && !isInternalTransferKind(t.kind),
   )
+  const periodTotals = useMemo(() => monthTotals(transactions, currentMonth), [transactions, currentMonth])
+  const periodResultado = periodTotals.entradas - periodTotals.saidas
 
   const spendByCostCenter = costCenters
     .map((cc) => ({ name: cc.name, value: monthTx.filter((t) => t.costCenterId === cc.id).reduce((s, t) => s + t.amount, 0) }))
@@ -42,33 +49,37 @@ export default function Reports() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Relatórios" subtitle="Uma visão consolidada da sua vida financeira, com base nos seus dados cadastrados." />
+      <PageHeader
+        title="Relatórios"
+        subtitle="Uma visão consolidada da sua vida financeira, com base nos seus dados cadastrados."
+        action={<MonthYearSelector />}
+      />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile label="Entradas do mês" value={formatCurrency(monthSummary.entradas)} icon={TrendingUp} accent="var(--color-cat-teal)" />
-        <StatTile label="Saídas do mês" value={formatCurrency(monthSummary.saidas)} icon={TrendingDown} accent="var(--color-cat-rose)" />
+        <StatTile label={`Entradas · ${periodLabel}`} value={formatCurrency(periodTotals.entradas)} icon={TrendingUp} accent="var(--color-cat-teal)" />
+        <StatTile label={`Saídas · ${periodLabel}`} value={formatCurrency(periodTotals.saidas)} icon={TrendingDown} accent="var(--color-cat-rose)" />
         <StatTile
-          label="Resultado do mês"
-          value={formatCurrency(monthSummary.resultado)}
+          label={`Resultado · ${periodLabel}`}
+          value={formatCurrency(periodResultado)}
           icon={Scale}
-          accent={monthSummary.resultado >= 0 ? 'var(--color-status-good)' : 'var(--color-status-critical)'}
+          accent={periodResultado >= 0 ? 'var(--color-status-good)' : 'var(--color-status-critical)'}
         />
         <StatTile label="Saldo atual" value={formatCurrency(totalBalance)} icon={Wallet} accent="var(--color-rose-700)" />
       </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <Card>
-          <CardTitle>Gastos por centro de custo (mês atual)</CardTitle>
+          <CardTitle>Gastos por centro de custo · {periodLabel}</CardTitle>
           {spendByCostCenter.length === 0 ? (
-            <EmptyState icon={PieChart} title="Sem saídas classificadas este mês" description="Registre saídas com centro de custo para ver a distribuição aqui." />
+            <EmptyState icon={PieChart} title={`Sem saídas classificadas em ${periodLabel}`} description="Registre saídas com centro de custo para ver a distribuição aqui." />
           ) : (
             <MagnitudeBarChart data={spendByCostCenter} />
           )}
         </Card>
         <Card>
-          <CardTitle>Gastos por categoria (mês atual)</CardTitle>
+          <CardTitle>Gastos por categoria · {periodLabel}</CardTitle>
           {spendByCategory.length === 0 ? (
-            <EmptyState icon={PieChart} title="Sem saídas classificadas este mês" description="Registre saídas com categoria para ver a distribuição aqui." />
+            <EmptyState icon={PieChart} title={`Sem saídas classificadas em ${periodLabel}`} description="Registre saídas com categoria para ver a distribuição aqui." />
           ) : (
             <MagnitudeBarChart data={spendByCategory} ramp={blueSequential} />
           )}

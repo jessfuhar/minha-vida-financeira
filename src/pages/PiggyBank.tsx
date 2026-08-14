@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Card } from '../components/ui/Card'
 import { ProgressBar } from '../components/ui/ProgressBar'
@@ -52,6 +53,19 @@ export default function PiggyBank() {
     setEditing(g)
     setModalOpen(true)
   }
+
+  // Permite chegar aqui a partir de um resultado clicável da busca geral (/buscar), já abrindo a
+  // meta/cofrinho correspondente — sem navegação quebrada.
+  const location = useLocation()
+  const navigate = useNavigate()
+  useEffect(() => {
+    const targetId = (location.state as { openGoalId?: string } | null)?.openGoalId
+    if (!targetId) return
+    const goal = goals.find((g) => g.id === targetId)
+    if (goal) openEdit(goal)
+    navigate(location.pathname, { replace: true, state: null })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state])
 
   const handleSubmit = async (values: GoalFormValues) => {
     const payload = {

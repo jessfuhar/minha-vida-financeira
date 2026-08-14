@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Wallet, TrendingUp, TrendingDown, Scale, Plus, Gauge } from 'lucide-react'
 import { Card, CardTitle } from '../components/ui/Card'
 import { StatTile } from '../components/ui/StatTile'
@@ -48,6 +48,19 @@ export default function Dashboard() {
     setEditingAccount(account)
     setAccountModalOpen(true)
   }
+
+  // Permite chegar aqui a partir de um resultado clicável da busca geral (/buscar), já abrindo a
+  // conta correspondente — sem navegação quebrada.
+  const location = useLocation()
+  const navigate = useNavigate()
+  useEffect(() => {
+    const targetId = (location.state as { openAccountId?: string } | null)?.openAccountId
+    if (!targetId) return
+    const acc = accounts.find((a) => a.id === targetId)
+    if (acc) openEditAccount(acc)
+    navigate(location.pathname, { replace: true, state: null })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state])
 
   const handleSubmitAccount = async (values: AccountFormValues) => {
     const payload = {

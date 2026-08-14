@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
@@ -60,6 +61,19 @@ export default function BillsToPay() {
     setEditing(b)
     setModalOpen(true)
   }
+
+  // Permite chegar aqui a partir de um resultado clicável da busca geral (/buscar), já abrindo a
+  // conta a pagar correspondente — sem navegação quebrada.
+  const location = useLocation()
+  const navigate = useNavigate()
+  useEffect(() => {
+    const targetId = (location.state as { openBillId?: string } | null)?.openBillId
+    if (!targetId) return
+    const bill = bills.find((b) => b.id === targetId)
+    if (bill) openEdit(bill)
+    navigate(location.pathname, { replace: true, state: null })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state])
 
   const handleSubmit = async (values: BillFormValues) => {
     const payload = {

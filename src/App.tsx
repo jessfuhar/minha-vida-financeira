@@ -1,5 +1,6 @@
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { DataProvider } from './context/DataContext'
+import { PeriodProvider } from './context/PeriodContext'
 import { ToastProvider } from './components/ui/Toast'
 import { ConfirmProvider } from './components/ui/Confirm'
 import { AppShell } from './components/layout/AppShell'
@@ -23,27 +24,29 @@ import Settings from './pages/Settings'
 function App() {
   return (
     <DataProvider>
-      <ToastProvider>
-        <ConfirmProvider>
-          <MemoryRouter initialEntries={['/']}>
-            <Routes>
-              <Route element={<AppShell />}>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/fluxo-de-caixa" element={<CashFlow />} />
-                <Route path="/contas-a-pagar" element={<BillsToPay />} />
-                <Route path="/cofrinho" element={<PiggyBank />} />
-                <Route path="/centros-de-custo" element={<CostCenters />} />
-                <Route path="/metas" element={<SpendingGoals />} />
-                <Route path="/relatorios" element={<Reports />} />
-                <Route path="/buscar" element={<Search />} />
-                <Route path="/notificacoes" element={<Notifications />} />
-                <Route path="/perfil" element={<Profile />} />
-                <Route path="/configuracoes" element={<Settings />} />
-              </Route>
-            </Routes>
-          </MemoryRouter>
-        </ConfirmProvider>
-      </ToastProvider>
+      <PeriodProvider>
+        <ToastProvider>
+          <ConfirmProvider>
+            <MemoryRouter initialEntries={['/']}>
+              <Routes>
+                <Route element={<AppShell />}>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/fluxo-de-caixa" element={<CashFlow />} />
+                  <Route path="/contas-a-pagar" element={<BillsToPay />} />
+                  <Route path="/cofrinho" element={<PiggyBank />} />
+                  <Route path="/centros-de-custo" element={<CostCenters />} />
+                  <Route path="/metas" element={<SpendingGoals />} />
+                  <Route path="/relatorios" element={<Reports />} />
+                  <Route path="/buscar" element={<Search />} />
+                  <Route path="/notificacoes" element={<Notifications />} />
+                  <Route path="/perfil" element={<Profile />} />
+                  <Route path="/configuracoes" element={<Settings />} />
+                </Route>
+              </Routes>
+            </MemoryRouter>
+          </ConfirmProvider>
+        </ToastProvider>
+      </PeriodProvider>
     </DataProvider>
   )
 }
