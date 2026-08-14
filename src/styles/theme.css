@@ -1,0 +1,102 @@
+/**
+ * Design tokens — "Minha vida financeira"
+ *
+ * Paleta principal (fornecida): #EB8A90 · #F09DA2 · #F5AFB5 · #FAC2C7 · #FFD4D9
+ * A escala abaixo estende essa paleta com tons mais claros (fundos) e mais
+ * escuros (texto de ênfase, estados ativos), e define uma paleta categórica
+ * e de status validadas para uso nos gráficos (ver skill de dataviz —
+ * checks de contraste e distinção para daltonismo).
+ *
+ * Só este arquivo precisa mudar para re-temar o produto.
+ */
+@theme {
+  --font-display: 'Poppins', 'Inter', system-ui, sans-serif;
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* Rosa — cor de marca */
+  --color-rose-50: #fff6f7;
+  --color-rose-100: #ffd4d9;
+  --color-rose-200: #fac2c7;
+  --color-rose-300: #f5afb5;
+  --color-rose-400: #f09da2;
+  --color-rose-500: #eb8a90;
+  --color-rose-600: #dd7079;
+  --color-rose-700: #c9636f;
+  --color-rose-800: #a84550;
+  --color-rose-900: #7a2e37;
+
+  /* Neutros — cinza quente, combina com o rosa sem "esfriar" a tela */
+  --color-neutral-50: #fdfbfb;
+  --color-neutral-100: #f7f3f2;
+  --color-neutral-200: #efeae9;
+  --color-neutral-300: #e1dad8;
+  --color-neutral-400: #c7bebb;
+  --color-neutral-500: #a79d99;
+  --color-neutral-600: #857a76;
+  --color-neutral-700: #635a57;
+  --color-neutral-800: #423c3a;
+  --color-neutral-900: #241f1e;
+
+  /* Categórica — identidade de séries em gráficos (validada p/ CVD) */
+  --color-cat-rose: #c9636f;
+  --color-cat-teal: #0f9488;
+  --color-cat-amber: #b8720a;
+  --color-cat-blue: #2c6cae;
+  --color-cat-sage: #4f8c55;
+  --color-cat-violet: #7a4fa0;
+
+  /* Status — significado reservado, sempre com ícone + texto */
+  --color-status-good: #2f9e52;
+  --color-status-good-bg: #eaf6ec;
+  --color-status-warning: #b5790f;
+  --color-status-warning-bg: #fbf1de;
+  --color-status-serious: #c15a2a;
+  --color-status-serious-bg: #fbeae1;
+  --color-status-critical: #c0304a;
+  --color-status-critical-bg: #fbe7ea;
+}
+
+:root {
+  color-scheme: light;
+  --surface-page: #fdf9f9;
+  --surface-card: #ffffff;
+  --surface-sunken: var(--color-rose-50);
+  --text-primary: #2a2222;
+  --text-secondary: #6b5f5d;
+  --text-muted: #9a8f8c;
+  --border-hairline: rgba(42, 34, 34, 0.08);
+}
+
+html,
+body {
+  background: var(--surface-page);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: var(--color-rose-200);
+  color: var(--text-primary);
+}
+
+/* Scrollbar discreta */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-neutral-300);
+  border-radius: 999px;
+  border: 2px solid var(--surface-page);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-neutral-400);
+}
