@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
-import { UploadCloud, FileWarning, CheckCircle2, AlertTriangle, ArrowRight, Sparkles } from 'lucide-react'
+import { UploadCloud, FileWarning, CheckCircle2, AlertTriangle, ArrowRight, Sparkles, HelpCircle } from 'lucide-react'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { Field, Select } from '../ui/FormField'
@@ -17,12 +17,13 @@ import {
   type ParsedStatementRow,
   type ImportFileKind,
 } from '../../lib/importParsers'
+import { parsePdf } from '../../lib/importPdf'
 import { guessMapping, isMappingConfident, mappableFieldLabel, type MappableField } from '../../lib/importMapping'
 import { inferTransactionKind } from '../../lib/importKind'
 import { detectDuplicates } from '../../lib/importDedup'
 import { findMatchingRule } from '../../lib/importRules'
 import { findPartnerForNewRow } from '../../lib/transferDetection'
-import { formatCurrency, formatDate } from '../../lib/format'
+import { formatCurrency, formatDate, parseCurrencyInput, isValidCurrencyInput } from '../../lib/format'
 import { transactionKindMeta } from '../../lib/transactionKind'
 
 export interface ImportRowToInsert {
@@ -54,6 +55,9 @@ interface ImportWizardProps {
   /** Vincula duas transações como transferência entre contas — chamado após a criação, para cada par
    * confirmado na prévia. */
   onLinkTransfer?: (idA: string, idB: string) => Promise<{ ok: boolean; reason?: string }>
+  /** Aplica um "saldo anterior" encontrado num PDF como novo saldo de referência da conta — só
+   * chamado quando a usuária confirma explicitamente na prévia (nunca automático). */
+  onUseReferenceBalance?: (accountId: string, amount: number, asOfDate: string) => Promise<void>
 }
 
 type Step = 'account' | 'file' | 'mapping' | 'preview'
@@ -74,10 +78,21 @@ interface PreviewRow {
   appliedRuleId?: string
   transferPartner?: Transaction
   transferConfirmed: boolean
+  // Campos editáveis na prévia (a interpretação do PDF pode ser imperfeita) — inicializados a
+  // partir do que foi reconhecido, mas nunca obrigam a usuária a importar um valor errado.
+  editDate: string
+  editDescription: string
+  editCounterparty: string
+  editAmountText: string
+  editDirection: TransactionDirection | ''
 }
 
 const REQUIRED_FIELDS: MappableField[] = ['date', 'description', 'amount']
 const OPTIONAL_FIELDS: MappableField[] = ['direction', 'document', 'balance']
+
+function computeRowValid(date: string, amountText: string, direction: string): boolean {
+  return Boolean(date) && isValidCurrencyInput(amountText) && (direction === 'entrada' || direction === 'saida')
+}
 
 export function ImportWizard({
   open,
@@ -89,10 +104,12 @@ export function ImportWizard({
   onConfirmImport,
   onRuleUsed,
   onLinkTransfer,
+  onUseReferenceBalance,
 }: ImportWizardProps) {
   const [step, setStep] = useState<Step>('account')
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? '')
   const [fileError, setFileError] = useState('')
+  const [failedFilesNotice, setFailedFilesNotice] = useState('')
   const [fileNames, setFileNames] = useState<string[]>([])
   const [parsing, setParsing] = useState(false)
   const [fileResults, setFileResults] = useState<FileParseResult[]>([])
@@ -103,12 +120,16 @@ export function ImportWizard({
   const [included, setIncluded] = useState<Record<number, boolean>>({})
   const [confirming, setConfirming] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  const [referenceBalanceApplied, setReferenceBalanceApplied] = useState(false)
+  const [applyingReferenceBalance, setApplyingReferenceBalance] = useState(false)
+  const [showUnrecognized, setShowUnrecognized] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const reset = () => {
     setStep('account')
     setAccountId(accounts[0]?.id ?? '')
     setFileError('')
+    setFailedFilesNotice('')
     setFileNames([])
     setParsing(false)
     setFileResults([])
@@ -119,6 +140,9 @@ export function ImportWizard({
     setIncluded({})
     setConfirming(false)
     setDragOver(false)
+    setReferenceBalanceApplied(false)
+    setApplyingReferenceBalance(false)
+    setShowUnrecognized(false)
   }
 
   const handleClose = () => {
@@ -158,6 +182,11 @@ export function ImportWizard({
         appliedRuleId: transferPartner ? undefined : rule?.id,
         transferPartner,
         transferConfirmed: false,
+        editDate: row.date ?? '',
+        editDescription: row.friendlyDescription || row.description,
+        editCounterparty: row.counterparty ?? '',
+        editAmountText: row.amount !== null ? row.amount.toFixed(2).replace('.', ',') : '',
+        editDirection: row.direction ?? '',
       }
     })
 
@@ -167,17 +196,20 @@ export function ImportWizard({
       initialIncluded[i] = r.isValid && !r.isDuplicate
     })
     setIncluded(initialIncluded)
+    setReferenceBalanceApplied(false)
     setStep('preview')
   }
 
   const parseOneFile = async (file: File, kind: ImportFileKind): Promise<ParsedStatement> => {
     if (kind === 'ofx' || kind === 'ofc') return parseOfx(await file.text(), kind)
     if (kind === 'xls' || kind === 'xlsx') return parseWorkbookFile(file, kind)
+    if (kind === 'pdf') return parsePdf(file)
     return parseDelimitedText(await file.text(), kind)
   }
 
   const handleFiles = async (files: File[]) => {
     setFileError('')
+    setFailedFilesNotice('')
     const withKinds = files.map((file) => ({ file, kind: detectFileKind(file.name) }))
     const unsupported = withKinds.filter((f) => !f.kind)
     if (unsupported.length > 0) {
@@ -196,15 +228,22 @@ export function ImportWizard({
         results.push({ file, statement })
       }
 
+      // Quando um dos arquivos falha, não descarta silenciosamente os demais: continua com os que
+      // deram certo e deixa claro, na prévia, qual arquivo teve problema (nunca inventa dados).
+      const succeeded = results.filter((r) => !r.statement.error)
       const withErrors = results.filter((r) => r.statement.error)
       if (withErrors.length > 0) {
-        setFileError(withErrors.map((r) => `${r.file.name}: ${r.statement.error}`).join(' '))
-        return
+        const notice = withErrors.map((r) => `${r.file.name}: ${r.statement.error}`).join(' ')
+        if (succeeded.length === 0) {
+          setFileError(notice)
+          return
+        }
+        setFailedFilesNotice(notice)
       }
 
-      setFileResults(results)
+      setFileResults(succeeded)
 
-      const needsMapping = results.filter((r) => !r.statement.autoIdentified)
+      const needsMapping = succeeded.filter((r) => !r.statement.autoIdentified && r.statement.kind !== 'pdf')
       if (needsMapping.length > 0) {
         const first = needsMapping[0]
         setManualMapping(guessMapping(first.statement.headers || []))
@@ -212,7 +251,7 @@ export function ImportWizard({
         setMappingSampleRows(first.statement.rawRows || [])
         setStep('mapping')
       } else {
-        buildPreviewFromResults(results)
+        buildPreviewFromResults(succeeded)
       }
     } catch (err) {
       console.error('[import] falha ao processar arquivo(s)', err)
@@ -250,6 +289,29 @@ export function ImportWizard({
     return fileResults.map((r) => ({ name: r.file.name, count: r.statement.rows.length }))
   }, [fileResults])
 
+  const unrecognizedByFile = useMemo(() => {
+    return fileResults
+      .filter((r) => r.statement.unrecognizedLines && r.statement.unrecognizedLines.length > 0)
+      .map((r) => ({ name: r.file.name, lines: r.statement.unrecognizedLines as string[] }))
+  }, [fileResults])
+
+  const pdfPreviousBalanceInfo = useMemo(() => {
+    const withBalance = fileResults.find((r) => r.statement.pdfPreviousBalance)
+    if (!withBalance || !withBalance.statement.pdfPreviousBalance) return undefined
+    return { fileName: withBalance.file.name, ...withBalance.statement.pdfPreviousBalance }
+  }, [fileResults])
+
+  const handleApplyReferenceBalance = async () => {
+    if (!pdfPreviousBalanceInfo || !pdfPreviousBalanceInfo.asOfDate || !onUseReferenceBalance) return
+    setApplyingReferenceBalance(true)
+    try {
+      await onUseReferenceBalance(accountId, pdfPreviousBalanceInfo.amount, pdfPreviousBalanceInfo.asOfDate)
+      setReferenceBalanceApplied(true)
+    } finally {
+      setApplyingReferenceBalance(false)
+    }
+  }
+
   const summary = useMemo(() => {
     const total = previewRows.length
     const entradas = previewRows.filter((r) => r.row.direction === 'entrada').length
@@ -266,14 +328,14 @@ export function ImportWizard({
     if (selectedRows.length === 0) return
 
     const rowsToInsert: ImportRowToInsert[] = selectedRows.map(({ r }) => ({
-      date: r.row.date as string,
-      description: r.row.friendlyDescription || r.row.description,
+      date: r.editDate,
+      description: r.editDescription || r.row.description,
       originalDescription: r.row.description,
-      counterparty: r.row.counterparty,
+      counterparty: r.editCounterparty || undefined,
       document: r.row.document,
       sourceFile: r.row.sourceFile,
-      amount: r.row.amount as number,
-      direction: r.row.direction as TransactionDirection,
+      amount: Math.abs(parseCurrencyInput(r.editAmountText)),
+      direction: r.editDirection as TransactionDirection,
       kind: r.kind,
       costCenterId: r.transferConfirmed ? null : r.costCenterId || null,
       categoryId: r.transferConfirmed ? null : r.categoryId || null,
@@ -386,6 +448,9 @@ export function ImportWizard({
                 <UploadCloud size={28} className="text-rose-500" />
                 <p className="text-[13.5px] font-medium text-neutral-700">Arraste um ou vários arquivos aqui, ou clique para selecionar</p>
                 <p className="text-[12px] text-neutral-400">Formatos aceitos: {supportedExtensionsLabel()}</p>
+                <p className="text-[11.5px] text-neutral-400">
+                  PDF: nunca importamos direto — extraímos o texto, mostramos uma prévia e só importamos após confirmação.
+                </p>
                 <Button variant="secondary" size="sm" className="mt-2" onClick={() => fileInputRef.current?.click()}>
                   Escolher arquivo(s)
                 </Button>
@@ -393,7 +458,7 @@ export function ImportWizard({
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept=".ofx,.ofc,.csv,.xls,.xlsx,.txt"
+                  accept=".ofx,.ofc,.csv,.xls,.xlsx,.txt,.pdf"
                   className="hidden"
                   onChange={onFileInputChange}
                 />
@@ -403,6 +468,13 @@ export function ImportWizard({
                 <p className="text-center text-[13px] text-neutral-500">
                   Lendo {fileNames.length > 1 ? `${fileNames.length} arquivos…` : fileNames[0]}
                 </p>
+              )}
+
+              {failedFilesNotice && (
+                <div className="flex items-start gap-2.5 rounded-xl bg-[var(--color-status-warning-bg)] px-3.5 py-3 text-[13px]" style={{ color: 'var(--color-status-warning)' }}>
+                  <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                  <p>{failedFilesNotice} Os demais arquivos foram processados normalmente e seguem na prévia abaixo.</p>
+                </div>
               )}
 
               {fileError && (
@@ -476,6 +548,17 @@ export function ImportWizard({
 
           {step === 'preview' && (
             <div className="space-y-4">
+              <p className="text-[12.5px] text-neutral-500">
+                Conta selecionada: <span className="font-medium text-neutral-700">{accounts.find((a) => a.id === accountId)?.nickname || accounts.find((a) => a.id === accountId)?.bank}</span>
+              </p>
+
+              {failedFilesNotice && (
+                <div className="flex items-start gap-2.5 rounded-xl bg-[var(--color-status-warning-bg)] px-3.5 py-3 text-[13px]" style={{ color: 'var(--color-status-warning)' }}>
+                  <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                  <p>{failedFilesNotice} Os demais arquivos foram processados normalmente e seguem abaixo.</p>
+                </div>
+              )}
+
               {fileBreakdown.length > 1 && (
                 <div className="rounded-xl border border-[var(--border-hairline)] px-3.5 py-3 text-[12.5px] text-neutral-600">
                   <p className="mb-1.5 font-medium text-neutral-700">{fileBreakdown.length} arquivos selecionados</p>
@@ -487,6 +570,61 @@ export function ImportWizard({
                       </li>
                     ))}
                   </ul>
+                </div>
+              )}
+
+              {pdfPreviousBalanceInfo && (
+                <div className="flex items-start gap-2.5 rounded-xl bg-[var(--color-neutral-100)] px-3.5 py-3 text-[12.5px] text-neutral-600">
+                  <AlertTriangle size={15} className="mt-0.5 shrink-0 text-neutral-400" />
+                  <div className="flex-1 space-y-1.5">
+                    <p>
+                      Saldo anterior encontrado no PDF ({pdfPreviousBalanceInfo.fileName}
+                      {pdfPreviousBalanceInfo.asOfDate ? `, referência ${formatDate(pdfPreviousBalanceInfo.asOfDate)}` : ''}):{' '}
+                      <span className="font-medium text-neutral-700">{formatCurrency(pdfPreviousBalanceInfo.amount)}</span>. Não alteramos o saldo de
+                      referência da conta automaticamente.
+                    </p>
+                    {referenceBalanceApplied ? (
+                      <p className="flex items-center gap-1 font-medium" style={{ color: 'var(--color-status-good)' }}>
+                        <CheckCircle2 size={13} /> Aplicado como saldo de referência da conta
+                      </p>
+                    ) : pdfPreviousBalanceInfo.asOfDate && onUseReferenceBalance ? (
+                      <button
+                        type="button"
+                        onClick={handleApplyReferenceBalance}
+                        disabled={applyingReferenceBalance}
+                        className="rounded-md bg-rose-700 px-2.5 py-1 text-[11.5px] font-medium text-white hover:bg-rose-800 disabled:opacity-60"
+                      >
+                        {applyingReferenceBalance ? 'Aplicando…' : 'Usar como saldo de referência'}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+
+              {unrecognizedByFile.length > 0 && (
+                <div className="rounded-xl bg-[var(--color-status-warning-bg)] px-3.5 py-3 text-[12.5px]" style={{ color: 'var(--color-status-warning)' }}>
+                  <button type="button" className="flex w-full items-center justify-between gap-2 text-left font-medium" onClick={() => setShowUnrecognized((v) => !v)}>
+                    <span className="flex items-center gap-1.5">
+                      <HelpCircle size={14} /> {unrecognizedByFile.reduce((n, f) => n + f.lines.length, 0)} linha(s) precisam de revisão (não viraram lançamento)
+                    </span>
+                    <span className="text-[11px] underline">{showUnrecognized ? 'Ocultar' : 'Ver linhas'}</span>
+                  </button>
+                  {showUnrecognized && (
+                    <div className="mt-2 max-h-40 space-y-2 overflow-auto text-[11.5px] text-neutral-600">
+                      {unrecognizedByFile.map((f) => (
+                        <div key={f.name}>
+                          <p className="font-medium text-neutral-500">{f.name}</p>
+                          <ul className="ml-3 list-disc space-y-0.5">
+                            {f.lines.map((l, idx) => (
+                              <li key={idx} className="truncate" title={l}>
+                                {l}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -516,8 +654,8 @@ export function ImportWizard({
                 {summary.invalid > 0 && ` · ${summary.invalid} com dados incompletos (não serão importados)`}
               </div>
 
-              <div className="max-h-[420px] overflow-auto rounded-xl border border-[var(--border-hairline)]">
-                <table className="w-full min-w-[1180px] border-collapse text-left text-[12.5px]">
+              <div className="max-h-[440px] overflow-auto rounded-xl border border-[var(--border-hairline)]">
+                <table className="w-full min-w-[1700px] border-collapse text-left text-[12.5px]">
                   <thead className="sticky top-0 bg-white">
                     <tr className="border-b border-[var(--border-hairline)] text-neutral-500">
                       <th className="px-3 py-2 font-medium">Importar</th>
@@ -526,8 +664,12 @@ export function ImportWizard({
                       <th className="px-3 py-2 font-medium">Contraparte</th>
                       <th className="px-3 py-2 font-medium">Valor</th>
                       <th className="px-3 py-2 font-medium">E/S</th>
+                      <th className="px-3 py-2 font-medium">Saldo</th>
                       <th className="px-3 py-2 font-medium">Tipo</th>
+                      <th className="px-3 py-2 font-medium">Arquivo de origem</th>
+                      <th className="px-3 py-2 font-medium">Centro de custo</th>
                       <th className="px-3 py-2 font-medium">Categoria sugerida</th>
+                      <th className="px-3 py-2 font-medium">Transferência</th>
                       <th className="px-3 py-2 font-medium">Status</th>
                     </tr>
                   </thead>
@@ -544,21 +686,103 @@ export function ImportWizard({
                               onChange={(e) => setIncluded((prev) => ({ ...prev, [i]: e.target.checked }))}
                             />
                           </td>
-                          <td className="whitespace-nowrap px-3 py-2 text-neutral-600">{r.row.date ? formatDate(r.row.date) : '—'}</td>
-                          <td className="max-w-[180px] truncate px-3 py-2 text-neutral-700" title={r.row.description}>
-                            {r.row.friendlyDescription || r.row.description}
+                          <td className="px-3 py-2">
+                            <input
+                              type="date"
+                              value={r.editDate}
+                              onChange={(e) => updateRow(i, { editDate: e.target.value, isValid: computeRowValid(e.target.value, r.editAmountText, r.editDirection) })}
+                              className="w-[128px] rounded-md border border-[var(--border-hairline)] px-1.5 py-1 text-[11.5px]"
+                            />
                           </td>
-                          <td className="max-w-[160px] truncate px-3 py-2 text-neutral-600" title={r.row.counterparty}>
-                            {r.row.counterparty || '—'}
+                          <td className="px-3 py-2">
+                            <input
+                              type="text"
+                              value={r.editDescription}
+                              title={r.row.description}
+                              onChange={(e) => updateRow(i, { editDescription: e.target.value })}
+                              className="w-[150px] rounded-md border border-[var(--border-hairline)] px-1.5 py-1 text-[11.5px]"
+                            />
                           </td>
-                          <td className="whitespace-nowrap px-3 py-2 tabular-nums text-neutral-700">
-                            {r.row.amount !== null ? formatCurrency(r.row.amount) : '—'}
+                          <td className="px-3 py-2">
+                            <input
+                              type="text"
+                              value={r.editCounterparty}
+                              placeholder="—"
+                              onChange={(e) => updateRow(i, { editCounterparty: e.target.value })}
+                              className="w-[150px] rounded-md border border-[var(--border-hairline)] px-1.5 py-1 text-[11.5px]"
+                            />
                           </td>
-                          <td className="whitespace-nowrap px-3 py-2 text-neutral-600">
-                            {r.row.direction === 'entrada' ? 'Entrada' : r.row.direction === 'saida' ? 'Saída' : '—'}
+                          <td className="px-3 py-2">
+                            <input
+                              type="text"
+                              value={r.editAmountText}
+                              onChange={(e) => updateRow(i, { editAmountText: e.target.value, isValid: computeRowValid(r.editDate, e.target.value, r.editDirection) })}
+                              className="w-[92px] rounded-md border border-[var(--border-hairline)] px-1.5 py-1 text-right text-[11.5px] tabular-nums"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <Select
+                              value={r.editDirection}
+                              onChange={(e) => updateRow(i, { editDirection: e.target.value as TransactionDirection | '', isValid: computeRowValid(r.editDate, r.editAmountText, e.target.value) })}
+                              className="!w-[104px] !py-1 !text-[11.5px]"
+                            >
+                              <option value="">Selecione…</option>
+                              <option value="entrada">Entrada</option>
+                              <option value="saida">Saída</option>
+                            </Select>
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2 tabular-nums text-neutral-500">
+                            {r.row.balance !== undefined ? formatCurrency(r.row.balance) : '—'}
                           </td>
                           <td className="whitespace-nowrap px-3 py-2 text-neutral-600">{transactionKindMeta[r.kind]?.label ?? r.kind}</td>
-                          <td className="min-w-[190px] px-3 py-2">
+                          <td className="max-w-[140px] truncate px-3 py-2 text-neutral-500" title={r.row.sourceFile}>
+                            {r.row.sourceFile || '—'}
+                          </td>
+                          <td className="min-w-[170px] px-3 py-2">
+                            {r.transferConfirmed ? (
+                              <span className="text-[11px] text-neutral-400">—</span>
+                            ) : (
+                              <Select
+                                value={r.costCenterId}
+                                onChange={(e) => updateRow(i, { costCenterId: e.target.value, categoryId: '' })}
+                                className="!py-1 !text-[11.5px]"
+                              >
+                                <option value="">Sem centro de custo</option>
+                                {costCenters.map((cc) => (
+                                  <option key={cc.id} value={cc.id}>
+                                    {cc.emoji} {cc.name}
+                                  </option>
+                                ))}
+                              </Select>
+                            )}
+                          </td>
+                          <td className="min-w-[170px] px-3 py-2">
+                            {r.transferConfirmed ? (
+                              <span className="text-[11px] text-neutral-400">—</span>
+                            ) : (
+                              <div className="space-y-1">
+                                <Select
+                                  value={r.categoryId}
+                                  onChange={(e) => updateRow(i, { categoryId: e.target.value })}
+                                  disabled={!selectedCc}
+                                  className="!py-1 !text-[11.5px]"
+                                >
+                                  <option value="">Sem categoria</option>
+                                  {selectedCc?.categories.map((cat) => (
+                                    <option key={cat.id} value={cat.id}>
+                                      {cat.name}
+                                    </option>
+                                  ))}
+                                </Select>
+                                {r.appliedRuleId && (
+                                  <p className="flex items-center gap-1 text-[10.5px] font-medium" style={{ color: 'var(--color-status-good)' }}>
+                                    <Sparkles size={10} /> Baseado em classificação anterior
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td className="min-w-[150px] px-3 py-2">
                             {r.transferPartner && !r.transferConfirmed ? (
                               <div className="space-y-1">
                                 <p className="flex items-center gap-1 text-[11.5px] font-medium" style={{ color: 'var(--color-status-warning)' }}>
@@ -584,38 +808,7 @@ export function ImportWizard({
                             ) : r.transferConfirmed ? (
                               <span className="text-[11.5px] font-medium text-neutral-500">Transferência confirmada</span>
                             ) : (
-                              <div className="space-y-1">
-                                <Select
-                                  value={r.costCenterId}
-                                  onChange={(e) => updateRow(i, { costCenterId: e.target.value, categoryId: '' })}
-                                  className="!py-1 !text-[11.5px]"
-                                >
-                                  <option value="">Sem centro de custo</option>
-                                  {costCenters.map((cc) => (
-                                    <option key={cc.id} value={cc.id}>
-                                      {cc.emoji} {cc.name}
-                                    </option>
-                                  ))}
-                                </Select>
-                                <Select
-                                  value={r.categoryId}
-                                  onChange={(e) => updateRow(i, { categoryId: e.target.value })}
-                                  disabled={!selectedCc}
-                                  className="!py-1 !text-[11.5px]"
-                                >
-                                  <option value="">Sem categoria</option>
-                                  {selectedCc?.categories.map((cat) => (
-                                    <option key={cat.id} value={cat.id}>
-                                      {cat.name}
-                                    </option>
-                                  ))}
-                                </Select>
-                                {r.appliedRuleId && (
-                                  <p className="flex items-center gap-1 text-[10.5px] font-medium" style={{ color: 'var(--color-status-good)' }}>
-                                    <Sparkles size={10} /> Baseado em classificação anterior
-                                  </p>
-                                )}
-                              </div>
+                              <span className="text-[11px] text-neutral-400">—</span>
                             )}
                           </td>
                           <td className="whitespace-nowrap px-3 py-2">

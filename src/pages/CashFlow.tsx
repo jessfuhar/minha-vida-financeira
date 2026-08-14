@@ -53,6 +53,7 @@ export default function CashFlow() {
     linkAsTransfer,
     saveClassificationRule,
     registerRuleUsage,
+    updateAccount,
   } = useData()
   const toast = useToast()
   const confirm = useConfirm()
@@ -493,6 +494,7 @@ export default function CashFlow() {
         onConfirmImport={handleConfirmImport}
         onRuleUsed={registerRuleUsage}
         onLinkTransfer={linkAsTransfer}
+        onUseReferenceBalance={(accountId, amount, asOfDate) => updateAccount(accountId, { openingBalance: amount, openingDate: asOfDate })}
       />
     </div>
   )
