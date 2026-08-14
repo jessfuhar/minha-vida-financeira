@@ -10,6 +10,7 @@ import { viteSingleFile } from 'vite-plugin-singlefile'
 const singleFile = process.env.BUILD_TARGET === 'singlefile'
 
 export default defineConfig({
+  base: '/minha-vida-financeira/',
   plugins: [react(), tailwindcss(), ...(singleFile ? [viteSingleFile()] : [])],
   build: {
     outDir: singleFile ? 'dist-singlefile' : 'dist',
