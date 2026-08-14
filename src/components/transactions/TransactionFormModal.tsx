@@ -16,6 +16,7 @@ export interface TransactionFormValues {
   date: string
   description: string
   originalDescription: string
+  document: string
   accountId: string
   costCenterId: string
   categoryId: string
@@ -30,6 +31,7 @@ function emptyValues(accounts: Account[]): TransactionFormValues {
     date: todayIso(),
     description: '',
     originalDescription: '',
+    document: '',
     accountId: accounts[0]?.id ?? '',
     costCenterId: '',
     categoryId: '',
@@ -70,6 +72,7 @@ export function TransactionFormModal({
         date: transaction.date,
         description: transaction.description,
         originalDescription: transaction.originalDescription ?? '',
+        document: transaction.document ?? '',
         accountId: transaction.accountId,
         costCenterId: transaction.costCenterId ?? '',
         categoryId: transaction.categoryId ?? '',
@@ -138,6 +141,12 @@ export function TransactionFormModal({
         </p>
       ) : (
         <div className="space-y-4">
+          {transaction?.source === 'importado' && (
+            <div className="rounded-xl bg-[var(--color-neutral-100)] px-3.5 py-2.5 text-[12.5px] text-neutral-600">
+              Origem: Importado de extrato — todos os campos abaixo continuam editáveis normalmente.
+            </div>
+          )}
+
           <Field label="Tipo de movimento" required>
             <PillToggle
               value={values.direction}
@@ -185,6 +194,14 @@ export function TransactionFormModal({
               />
             </Field>
           </div>
+
+          <Field label="Documento / identificador (opcional)" hint="Nº do documento, comprovante ou identificador do extrato">
+            <TextInput
+              value={values.document}
+              onChange={(e) => setValues((v) => ({ ...v, document: e.target.value }))}
+              placeholder="Ex.: 000123456789"
+            />
+          </Field>
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Conta bancária" required error={error.includes('conta') ? error : undefined}>

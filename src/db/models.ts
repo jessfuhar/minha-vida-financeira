@@ -52,6 +52,10 @@ export interface Transaction {
   categoryId: string | null
   status: 'classificado' | 'aguardando_classificacao'
   note?: string
+  /** Documento/identificador do lançamento (nº do documento, FITID do extrato, etc.), quando existir. */
+  document?: string
+  /** Origem do lançamento — puramente informativo, nunca bloqueia edição. Ausente = lançamento antigo (tratado como manual). */
+  source?: 'manual' | 'importado'
   /** Preenchido quando o lançamento foi gerado automaticamente ao pagar uma conta. */
   billId?: string
   createdAt: string

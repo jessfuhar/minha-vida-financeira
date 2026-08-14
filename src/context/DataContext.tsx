@@ -53,6 +53,7 @@ interface DataContextValue {
   deleteAccount: (id: string) => Promise<void>
 
   addTransaction: (input: NewTransaction) => Promise<Transaction>
+  addTransactionsBatch: (inputs: NewTransaction[]) => Promise<Transaction[]>
   updateTransaction: (id: string, patch: Partial<NewTransaction>) => Promise<void>
   deleteTransaction: (id: string) => Promise<void>
 
@@ -217,6 +218,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const addTransaction = useCallback(async (input: NewTransaction) => {
     const transaction: Transaction = {
       ...input,
+      source: input.source ?? 'manual',
       status: input.status ?? (input.costCenterId && input.categoryId ? 'classificado' : 'aguardando_classificacao'),
       id: generateId(),
       createdAt: now(),
@@ -225,6 +227,22 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await putItem('transactions', transaction)
     setTransactions((prev) => [...prev, transaction])
     return transaction
+  }, [])
+
+  /** Inserção em lote (usada pela importação de extratos) — grava tudo no IndexedDB e
+   * atualiza o estado numa única passada, em vez de uma chamada `addTransaction` por linha. */
+  const addTransactionsBatch = useCallback(async (inputs: NewTransaction[]) => {
+    const created: Transaction[] = inputs.map((input) => ({
+      ...input,
+      source: input.source ?? 'importado',
+      status: input.status ?? (input.costCenterId && input.categoryId ? 'classificado' : 'aguardando_classificacao'),
+      id: generateId(),
+      createdAt: now(),
+      updatedAt: now(),
+    }))
+    await Promise.all(created.map((t) => putItem('transactions', t)))
+    setTransactions((prev) => [...prev, ...created])
+    return created
   }, [])
 
   const updateTransaction = useCallback(
@@ -591,6 +609,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     updateAccount,
     deleteAccount,
     addTransaction,
+    addTransactionsBatch,
     updateTransaction,
     deleteTransaction,
     addCostCenter,

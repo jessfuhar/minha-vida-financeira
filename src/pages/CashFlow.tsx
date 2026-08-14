@@ -6,13 +6,14 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { CashFlowChart } from '../components/charts/CashFlowChart'
 import { TransactionsTable } from '../components/transactions/TransactionsTable'
 import { TransactionFormModal, type TransactionFormValues } from '../components/transactions/TransactionFormModal'
+import { ImportWizard, type ImportRowToInsert } from '../components/import/ImportWizard'
 import { StatTile } from '../components/ui/StatTile'
 import { useToast } from '../components/ui/Toast'
 import { useConfirm } from '../components/ui/Confirm'
 import { useData } from '../context/DataContext'
 import { monthlyCashFlowSeries, dailyCashFlowSeries } from '../lib/aggregations'
 import { formatCurrency, parseCurrencyInput } from '../lib/format'
-import { TrendingUp, TrendingDown, Scale, Plus, ArrowLeftRight } from 'lucide-react'
+import { TrendingUp, TrendingDown, Scale, Plus, ArrowLeftRight, Upload } from 'lucide-react'
 import type { Transaction } from '../db/models'
 
 const periods = [
@@ -21,13 +22,15 @@ const periods = [
 ] as const
 
 export default function CashFlow() {
-  const { accounts, transactions, costCenters, monthSummary, addTransaction, updateTransaction, deleteTransaction } = useData()
+  const { accounts, transactions, costCenters, monthSummary, addTransaction, updateTransaction, deleteTransaction, addTransactionsBatch } =
+    useData()
   const toast = useToast()
   const confirm = useConfirm()
 
   const [period, setPeriod] = useState<(typeof periods)[number]['id']>('mensal')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
 
   const data = period === 'mensal' ? monthlyCashFlowSeries(accounts, transactions) : dailyCashFlowSeries(accounts, transactions)
 
@@ -53,6 +56,7 @@ export default function CashFlow() {
       date: values.date,
       description: values.description.trim(),
       originalDescription: values.originalDescription.trim() || undefined,
+      document: values.document.trim() || undefined,
       accountId: values.accountId,
       costCenterId: values.costCenterId || null,
       categoryId: values.categoryId || null,
@@ -85,15 +89,39 @@ export default function CashFlow() {
     setModalOpen(false)
   }
 
+  const handleConfirmImport = async (importAccountId: string, rows: ImportRowToInsert[]) => {
+    await addTransactionsBatch(
+      rows.map((r) => ({
+        date: r.date,
+        description: r.description,
+        originalDescription: r.originalDescription,
+        document: r.document,
+        kind: r.kind,
+        direction: r.direction,
+        amount: r.amount,
+        accountId: importAccountId,
+        costCenterId: null,
+        categoryId: null,
+        source: 'importado' as const,
+      })),
+    )
+    toast.show(`${rows.length} lançamento${rows.length === 1 ? '' : 's'} importado${rows.length === 1 ? '' : 's'}.`)
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Fluxo de Caixa"
         subtitle="Acompanhe entradas, saídas e a evolução do seu saldo ao longo do tempo."
         action={
-          <Button onClick={openNew}>
-            <Plus size={16} /> Novo lançamento
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setImportOpen(true)}>
+              <Upload size={16} /> Importar extrato
+            </Button>
+            <Button onClick={openNew}>
+              <Plus size={16} /> Novo lançamento
+            </Button>
+          </div>
         }
       />
 
@@ -174,6 +202,14 @@ export default function CashFlow() {
         accounts={accounts}
         costCenters={costCenters}
         transaction={editing}
+      />
+
+      <ImportWizard
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        accounts={accounts}
+        transactions={transactions}
+        onConfirmImport={handleConfirmImport}
       />
     </div>
   )

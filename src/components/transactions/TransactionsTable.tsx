@@ -57,7 +57,14 @@ export function TransactionsTable({
             <tr key={t.id} className="border-t border-[var(--border-hairline)] text-[13.5px]">
               <td className="whitespace-nowrap py-3 pr-4 text-neutral-500 tabular-nums">{formatDate(t.date)}</td>
               <td className="max-w-[220px] py-3 pr-4">
-                <p className="truncate font-medium text-neutral-800">{t.description}</p>
+                <p className="truncate font-medium text-neutral-800">
+                  {t.description}
+                  {t.source === 'importado' && (
+                    <span className="ml-1.5 rounded-full bg-[var(--color-neutral-100)] px-1.5 py-0.5 align-middle text-[10px] font-medium text-neutral-500">
+                      Importado
+                    </span>
+                  )}
+                </p>
                 {(t.originalDescription || t.kind) && (
                   <p className="truncate text-[11.5px] text-neutral-400">
                     {[t.originalDescription, transactionKindMeta[t.kind]?.label].filter(Boolean).join(' · ')}
