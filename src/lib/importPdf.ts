@@ -17,7 +17,8 @@ import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist'
 // aponta para um caminho quebrado após o deploy.
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { parseCurrencyInput } from './format'
-import type { ParsedStatement, ParsedStatementRow } from './importParsers'
+import { extractCounterparty } from './importCounterparty'
+import type { ParsedStatement, ParsedStatementRow, PdfUnrecognizedCandidate } from './importParsers'
 
 GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl
 
@@ -98,7 +99,7 @@ const HEADER_FOOTER_PATTERNS: RegExp[] = [
   /autoatendimento\s*bb/i,
   /\bsisbb\b/i,
   /^ag[eê]ncia\b/i,
-  /^conta\b\s*[:\-]?\s*\d/i,
+  /^conta\b\s*[:\-]?\s*(\d.*)?$/i,
   /^cliente\b/i,
   /^p[aá]gina\s*\d+/i,
   /^extrato\b/i,
@@ -112,6 +113,9 @@ const HEADER_FOOTER_PATTERNS: RegExp[] = [
   /^www\./i,
   /deficiente\s+auditivo/i,
   /^per[ií]odo\b/i,
+  /^varia[cç][aã]o\b/i,
+  /data\s+balancete/i,
+  /dia\s+base/i,
 ]
 
 function isHeaderFooterLine(line: string): boolean {
@@ -224,6 +228,80 @@ function resolveDirectionMarker(rest: string, valueToken: string): 'entrada' | '
   return null
 }
 
+// ---------- rótulo de tipo (para os cards de "possível movimentação") ----------
+
+function detectTypeLabel(text: string): string | undefined {
+  const t = normalize(text)
+  if (t.includes('pix') && t.includes('receb')) return 'Pix - Recebido'
+  if (t.includes('pix') && t.includes('envi')) return 'Pix - Enviado'
+  if (t.includes('pagamento')) return 'Pagamento'
+  if (t.includes('tarifa')) return 'Tarifa'
+  if (t.includes('debito')) return 'Débito'
+  if (t.includes('credito')) return 'Crédito'
+  if (t.includes('deposito')) return 'Depósito'
+  if (t.includes('juros')) return 'Juros'
+  if (t.includes('saque')) return 'Saque'
+  if (t.includes('transfer')) return 'Transferência'
+  if (t.includes('boleto')) return 'Boleto'
+  return undefined
+}
+
+/** Tenta achar um número de documento provável no texto (ex.: "69.168.651"), evitando reaproveitar
+ * o mesmo trecho já usado como data ou valor. Nunca inventa — devolve `undefined` se não achar. */
+function extractProbableDocument(text: string, exclude: string[]): string | undefined {
+  const candidates = [
+    ...[...text.matchAll(/\b\d{2,3}(?:\.\d{3}){1,3}\b/g)].map((m) => m[0]),
+    ...[...text.matchAll(/\b\d{5,}\b/g)].map((m) => m[0]),
+  ]
+  for (const c of candidates) {
+    if (exclude.includes(c)) continue
+    return c
+  }
+  return undefined
+}
+
+function extractCounterpartyGuess(clusterLines: string[]): string | undefined {
+  for (const line of clusterLines) {
+    const guess = extractCounterparty(line)
+    if (guess) return guess
+  }
+  return undefined
+}
+
+/** Monta um card de "possível movimentação" com o máximo de contexto que pudermos identificar com
+ * segurança a partir de um grupo de linhas órfãs adjacentes — nunca inventa data, valor ou
+ * contraparte: quando não dá para determinar algo com segurança, o campo fica `undefined`/`null`. */
+function buildCandidateFromCluster(clusterLines: string[], fallbackYear: string | null): PdfUnrecognizedCandidate {
+  const combined = clusterLines.join(' / ')
+
+  const dateMatch = combined.match(/\d{2}\/\d{2}(?:\/\d{2,4})?/)
+  const probableDate = dateMatch ? parsePdfDateToken(dateMatch[0], fallbackYear) : null
+
+  const valueTokens = [...combined.matchAll(VALUE_TOKEN_RE)].map((m) => m[0])
+  let probableAmount: number | null = null
+  if (valueTokens.length > 0) {
+    const v = parseCurrencyInput(valueTokens[valueTokens.length - 1])
+    probableAmount = Number.isNaN(v) ? null : Math.abs(v)
+  }
+
+  const marker = valueTokens.length > 0 ? resolveDirectionMarker(combined, valueTokens[valueTokens.length - 1]) : null
+  const probableDirection = marker ?? inferPdfDirection(combined)
+
+  const typeLabel = detectTypeLabel(combined)
+  const probableCounterparty = extractCounterpartyGuess(clusterLines)
+  const probableDocument = extractProbableDocument(combined, [...(dateMatch ? [dateMatch[0]] : []), ...valueTokens])
+
+  return {
+    contextLines: clusterLines,
+    typeLabel,
+    probableDate,
+    probableAmount,
+    probableDirection,
+    probableCounterparty,
+    probableDocument,
+  }
+}
+
 // ---------- máquina de estados principal ----------
 
 interface PendingTransaction {
@@ -236,19 +314,25 @@ interface PendingTransaction {
   rawLine: string
 }
 
+interface OrphanEntry {
+  text: string
+  seq: number
+}
+
 interface PdfParseResult {
   rows: ParsedStatementRow[]
-  unrecognizedLines: string[]
+  unrecognizedCandidates: PdfUnrecognizedCandidate[]
   previousBalance?: { amount: number; asOfDate: string | null }
 }
 
 function parsePdfLines(lines: string[]): PdfParseResult {
   const rows: ParsedStatementRow[] = []
-  const unrecognizedLines: string[] = []
+  const orphanEntries: OrphanEntry[] = []
   let previousBalance: { amount: number; asOfDate: string | null } | undefined
   const fallbackYear = findFallbackYear(lines)
 
   let pending: PendingTransaction | null = null
+  let seq = 0
 
   const flushPending = () => {
     if (!pending) return
@@ -272,6 +356,7 @@ function parsePdfLines(lines: string[]): PdfParseResult {
 
   for (const rawLine of lines) {
     const line = rawLine.trim()
+    seq++
     if (!line) continue
 
     if (isHeaderFooterLine(line) || isColumnHeaderLine(line)) {
@@ -326,12 +411,39 @@ function parsePdfLines(lines: string[]): PdfParseResult {
     if (pending) {
       pending.continuationParts.push(line)
     } else {
-      unrecognizedLines.push(line)
+      orphanEntries.push({ text: line, seq })
     }
   }
   flushPending()
 
-  return { rows, unrecognizedLines, previousBalance }
+  // Nunca mostra de novo, como "não reconhecida", uma linha que já faz parte de uma movimentação
+  // reconhecida (ex.: um recapitulativo solto de "Pix - Recebido" que apareceu em outro ponto do
+  // extrato) — evita falsos positivos que não ajudam a usuária a entender o que realmente falta revisar.
+  const consumedTexts = rows.flatMap((r) => [normalize(r.friendlyDescription), normalize(r.counterparty || ''), normalize(r.description)]).filter((t) => t.length >= 4)
+
+  // Agrupa linhas órfãs fisicamente adjacentes (sem nenhuma outra linha, cabeçalho ou movimentação,
+  // entre elas) num único card de contexto — em vez de mostrar cada fragmento solto isoladamente.
+  const clusters: string[][] = []
+  let previousSeq: number | null = null
+  for (const entry of orphanEntries) {
+    const last = clusters[clusters.length - 1]
+    if (last && previousSeq !== null && entry.seq - previousSeq === 1) {
+      last.push(entry.text)
+    } else {
+      clusters.push([entry.text])
+    }
+    previousSeq = entry.seq
+  }
+
+  const unrecognizedCandidates: PdfUnrecognizedCandidate[] = []
+  for (const cluster of clusters) {
+    const combinedNormalized = normalize(cluster.join(' ')).trim()
+    const isDuplicateOfRecognized = combinedNormalized.length >= 6 && consumedTexts.some((ct) => ct.includes(combinedNormalized))
+    if (isDuplicateOfRecognized) continue
+    unrecognizedCandidates.push(buildCandidateFromCluster(cluster, fallbackYear))
+  }
+
+  return { rows, unrecognizedCandidates, previousBalance }
 }
 
 /** Ponto de entrada: lê um arquivo PDF de extrato e devolve um `ParsedStatement` no mesmo formato
@@ -360,9 +472,9 @@ export async function parsePdf(file: File): Promise<ParsedStatement> {
     }
   }
 
-  const { rows, unrecognizedLines, previousBalance } = parsePdfLines(lines)
+  const { rows, unrecognizedCandidates, previousBalance } = parsePdfLines(lines)
 
-  if (rows.length === 0 && unrecognizedLines.length === 0) {
+  if (rows.length === 0 && unrecognizedCandidates.length === 0) {
     return {
       kind: 'pdf',
       autoIdentified: false,
@@ -375,7 +487,7 @@ export async function parsePdf(file: File): Promise<ParsedStatement> {
     kind: 'pdf',
     autoIdentified: true,
     rows,
-    unrecognizedLines: unrecognizedLines.length > 0 ? unrecognizedLines : undefined,
+    unrecognizedCandidates: unrecognizedCandidates.length > 0 ? unrecognizedCandidates : undefined,
     pdfPreviousBalance: previousBalance,
   }
 }

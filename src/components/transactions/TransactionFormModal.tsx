@@ -50,6 +50,10 @@ interface TransactionFormModalProps {
   accounts: Account[]
   costCenters: CostCenter[]
   transaction?: Transaction | null
+  /** Valores iniciais para um lançamento NOVO (ignorado quando `transaction` está definido) — usado,
+   * por exemplo, para pré-preencher o formulário a partir de uma possível movimentação de PDF que
+   * não foi reconhecida automaticamente. Todos os campos continuam editáveis normalmente. */
+  initialValues?: Partial<TransactionFormValues>
 }
 
 export function TransactionFormModal({
@@ -61,6 +65,7 @@ export function TransactionFormModal({
   accounts,
   costCenters,
   transaction,
+  initialValues,
 }: TransactionFormModalProps) {
   const [values, setValues] = useState<TransactionFormValues>(() => emptyValues(accounts))
   const [error, setError] = useState('')
@@ -85,11 +90,11 @@ export function TransactionFormModal({
         note: transaction.note ?? '',
       })
     } else {
-      setValues(emptyValues(accounts))
+      setValues({ ...emptyValues(accounts), ...initialValues })
     }
     setSaveAsRule(false)
     setError('')
-  }, [open, transaction, accounts])
+  }, [open, transaction, accounts, initialValues])
 
   const availableKinds = kindsByDirection[values.direction]
   const selectedCostCenter = costCenters.find((c) => c.id === values.costCenterId)

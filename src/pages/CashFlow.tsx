@@ -19,14 +19,17 @@ import { StatTile } from '../components/ui/StatTile'
 import { useToast } from '../components/ui/Toast'
 import { useConfirm } from '../components/ui/Confirm'
 import { useData } from '../context/DataContext'
-import { monthlyCashFlowSeries, dailyCashFlowSeries, monthKey, monthLabel } from '../lib/aggregations'
+import { monthlyCashFlowSeries, dailyCashFlowSeries, monthKey, monthLabel, todayIso } from '../lib/aggregations'
 import { formatCurrency, parseCurrencyInput } from '../lib/format'
 import { useSelection } from '../lib/useSelection'
 import { groupByNormalizedCounterparty } from '../lib/importRules'
 import { findTransferCandidates } from '../lib/transferDetection'
+import { detectDuplicates } from '../lib/importDedup'
 import { accountTypeLabel } from '../components/accounts/AccountCard'
 import { TrendingUp, TrendingDown, Scale, Plus, ArrowLeftRight, Upload, Repeat, Search as SearchIcon } from 'lucide-react'
 import type { Transaction } from '../db/models'
+import type { ParsedStatementRow } from '../lib/importParsers'
+import type { TransactionDirection } from '../data/types'
 
 const periods = [
   { id: 'mensal', label: 'Últimos 6 meses' },
@@ -62,6 +65,7 @@ export default function CashFlow() {
   const [period, setPeriod] = useState<(typeof periods)[number]['id']>('mensal')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
+  const [newTransactionPrefill, setNewTransactionPrefill] = useState<Partial<TransactionFormValues> | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
   const [deletingTransfer, setDeletingTransfer] = useState<Transaction | null>(null)
@@ -99,10 +103,65 @@ export default function CashFlow() {
 
   const openNew = () => {
     setEditing(null)
+    setNewTransactionPrefill(null)
     setModalOpen(true)
   }
   const openEdit = (t: Transaction) => {
     setEditing(t)
+    setNewTransactionPrefill(null)
+    setModalOpen(true)
+  }
+
+  /** Abre o formulário existente de lançamento já preenchido a partir de uma "possível movimentação"
+   * de PDF que não foi reconhecida automaticamente — reaproveita a mesma dedicação/lógica de
+   * deduplicação usada na importação, avisando antes se parecer duplicada. */
+  const handleCreateFromCandidate = async (
+    candidateAccountId: string,
+    prefill: {
+      date: string
+      description: string
+      originalDescription: string
+      counterparty: string
+      document: string
+      direction: TransactionDirection | ''
+      amount: string
+    },
+  ) => {
+    const amountNum = parseCurrencyInput(prefill.amount)
+    if (prefill.date && !Number.isNaN(amountNum) && amountNum > 0) {
+      const syntheticRow: ParsedStatementRow = {
+        index: 0,
+        date: prefill.date || null,
+        description: prefill.originalDescription,
+        friendlyDescription: prefill.description,
+        counterparty: prefill.counterparty || undefined,
+        amount: amountNum,
+        direction: (prefill.direction || null) as 'entrada' | 'saida' | null,
+        document: prefill.document || undefined,
+        rawFields: {},
+      }
+      const dedup = detectDuplicates([syntheticRow], candidateAccountId, transactions)
+      if (dedup[0]?.isPossibleDuplicate) {
+        const ok = await confirm({
+          title: 'Possível duplicidade',
+          description: `${dedup[0].reason || 'Já existe um lançamento parecido nesta conta.'} Deseja continuar mesmo assim?`,
+          confirmLabel: 'Continuar mesmo assim',
+        })
+        if (!ok) return
+      }
+    }
+
+    setEditing(null)
+    setNewTransactionPrefill({
+      direction: (prefill.direction || 'saida') as TransactionDirection,
+      date: prefill.date || todayIso(),
+      description: prefill.description,
+      originalDescription: prefill.originalDescription,
+      counterparty: prefill.counterparty,
+      document: prefill.document,
+      accountId: candidateAccountId,
+      amount: prefill.amount,
+    })
     setModalOpen(true)
   }
 
@@ -409,17 +468,6 @@ export default function CashFlow() {
         </Button>
       </BulkActionBar>
 
-      <TransactionFormModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        onSubmit={handleSubmit}
-        onDelete={editing ? handleDeleteFromModal : undefined}
-        onUnlinkTransfer={editing?.transferId ? handleUnlinkTransfer : undefined}
-        accounts={accounts}
-        costCenters={costCenters}
-        transaction={editing}
-      />
-
       <TransferFormModal open={transferOpen} onClose={() => setTransferOpen(false)} onSubmit={handleTransferSubmit} accounts={accounts} />
 
       <TransferDeleteChoiceModal
@@ -495,6 +543,24 @@ export default function CashFlow() {
         onRuleUsed={registerRuleUsage}
         onLinkTransfer={linkAsTransfer}
         onUseReferenceBalance={(accountId, amount, asOfDate) => updateAccount(accountId, { openingBalance: amount, openingDate: asOfDate })}
+        onCreateFromCandidate={handleCreateFromCandidate}
+      />
+
+      {/* Renderizado depois do ImportWizard para poder abrir "por cima" dele quando disparado a
+          partir de uma possível movimentação não reconhecida na prévia de importação. */}
+      <TransactionFormModal
+        open={modalOpen}
+        onClose={() => {
+          setModalOpen(false)
+          setNewTransactionPrefill(null)
+        }}
+        onSubmit={handleSubmit}
+        onDelete={editing ? handleDeleteFromModal : undefined}
+        onUnlinkTransfer={editing?.transferId ? handleUnlinkTransfer : undefined}
+        accounts={accounts}
+        costCenters={costCenters}
+        transaction={editing}
+        initialValues={newTransactionPrefill ?? undefined}
       />
     </div>
   )

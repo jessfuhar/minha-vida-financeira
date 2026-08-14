@@ -45,14 +45,31 @@ export interface ParsedStatement {
   rawRows?: string[][]
   /** Saldo informado no extrato (ex.: LEDGERBAL do OFX) — puramente informativo, nunca aplicado automaticamente. */
   statementBalance?: { amount: number; asOfDate: string | null }
-  /** Linhas do PDF que não puderam ser associadas com segurança a uma movimentação — nunca viram
-   * lançamento sozinhas; ficam disponíveis para revisão manual na prévia. */
-  unrecognizedLines?: string[]
+  /** Possíveis movimentações do PDF que não puderam ser associadas com segurança a um lançamento —
+   * nunca viram lançamento sozinhas; ficam disponíveis para revisão manual (criar ou ignorar) na
+   * prévia, com o máximo de contexto que pudermos identificar com segurança. Linhas que já fazem
+   * parte de um lançamento reconhecido, ou que são cabeçalho/rodapé do extrato, nunca aparecem aqui. */
+  unrecognizedCandidates?: PdfUnrecognizedCandidate[]
   /** "Saldo anterior" encontrado no PDF (quando existir). Diferente de `statementBalance`: aqui a
    * usuária pode optar explicitamente por usá-lo como saldo de referência da conta — nunca aplicado
    * automaticamente. */
   pdfPreviousBalance?: { amount: number; asOfDate: string | null }
   error?: string
+}
+
+/** Uma possível movimentação encontrada num PDF que não pôde ser associada com segurança a um
+ * lançamento completo — sempre com o texto original de contexto, e `undefined`/`null` (nunca um
+ * valor inventado) nos campos que não puderam ser determinados. */
+export interface PdfUnrecognizedCandidate {
+  /** Linhas originais do PDF relacionadas a esta possível movimentação, na ordem em que aparecem. */
+  contextLines: string[]
+  typeLabel?: string
+  probableDate: string | null
+  probableAmount: number | null
+  probableDirection: 'entrada' | 'saida' | null
+  probableCounterparty?: string
+  probableDocument?: string
+  sourceFile?: string
 }
 
 const SUPPORTED_EXTENSIONS: Record<string, ImportFileKind> = {
