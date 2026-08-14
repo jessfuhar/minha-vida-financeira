@@ -9,6 +9,7 @@ import {
   PiggyBank,
   Layers,
   BarChart3,
+  Gauge,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -39,5 +40,6 @@ export const topModules: NavItem[] = [
   { label: 'Contas a Pagar', path: '/contas-a-pagar', icon: ReceiptText },
   { label: 'Cofrinho', path: '/cofrinho', icon: PiggyBank },
   { label: 'Centros de Custo', path: '/centros-de-custo', icon: Layers },
+  { label: 'Metas', path: '/metas', icon: Gauge },
   { label: 'Relatórios', path: '/relatorios', icon: BarChart3 },
 ]

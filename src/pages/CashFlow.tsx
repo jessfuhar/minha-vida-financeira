@@ -1,13 +1,19 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Card, CardTitle } from '../components/ui/Card'
+import { Button } from '../components/ui/Button'
+import { EmptyState } from '../components/ui/EmptyState'
 import { CashFlowChart } from '../components/charts/CashFlowChart'
 import { TransactionsTable } from '../components/transactions/TransactionsTable'
+import { TransactionFormModal, type TransactionFormValues } from '../components/transactions/TransactionFormModal'
 import { StatTile } from '../components/ui/StatTile'
-import { monthlyCashFlow, dailyCashFlow, monthSummary } from '../data/cashflow'
-import { transactions } from '../data/transactions'
-import { formatCurrency } from '../lib/format'
-import { TrendingUp, TrendingDown, Scale } from 'lucide-react'
+import { useToast } from '../components/ui/Toast'
+import { useConfirm } from '../components/ui/Confirm'
+import { useData } from '../context/DataContext'
+import { monthlyCashFlowSeries, dailyCashFlowSeries } from '../lib/aggregations'
+import { formatCurrency, parseCurrencyInput } from '../lib/format'
+import { TrendingUp, TrendingDown, Scale, Plus, ArrowLeftRight } from 'lucide-react'
+import type { Transaction } from '../db/models'
 
 const periods = [
   { id: 'mensal', label: 'Últimos 6 meses' },
@@ -15,40 +21,90 @@ const periods = [
 ] as const
 
 export default function CashFlow() {
+  const { accounts, transactions, costCenters, monthSummary, addTransaction, updateTransaction, deleteTransaction } = useData()
+  const toast = useToast()
+  const confirm = useConfirm()
+
   const [period, setPeriod] = useState<(typeof periods)[number]['id']>('mensal')
-  const data = period === 'mensal' ? monthlyCashFlow : dailyCashFlow
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing] = useState<Transaction | null>(null)
+
+  const data = period === 'mensal' ? monthlyCashFlowSeries(accounts, transactions) : dailyCashFlowSeries(accounts, transactions)
+
+  const sortedTransactions = useMemo(
+    () => [...transactions].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt.localeCompare(a.createdAt))),
+    [transactions],
+  )
+
+  const openNew = () => {
+    setEditing(null)
+    setModalOpen(true)
+  }
+  const openEdit = (t: Transaction) => {
+    setEditing(t)
+    setModalOpen(true)
+  }
+
+  const handleSubmit = async (values: TransactionFormValues) => {
+    const payload = {
+      direction: values.direction,
+      kind: values.kind,
+      amount: parseCurrencyInput(values.amount),
+      date: values.date,
+      description: values.description.trim(),
+      originalDescription: values.originalDescription.trim() || undefined,
+      accountId: values.accountId,
+      costCenterId: values.costCenterId || null,
+      categoryId: values.categoryId || null,
+      note: values.note.trim() || undefined,
+    }
+    if (editing) {
+      await updateTransaction(editing.id, payload)
+      toast.show('Lançamento atualizado.')
+    } else {
+      await addTransaction(payload)
+      toast.show('Lançamento adicionado.')
+    }
+  }
+
+  const handleDelete = async (t: Transaction) => {
+    const ok = await confirm({
+      title: 'Excluir lançamento',
+      description: `Excluir "${t.description}"? Essa ação não pode ser desfeita.`,
+      confirmLabel: 'Excluir',
+      danger: true,
+    })
+    if (!ok) return
+    await deleteTransaction(t.id)
+    toast.show('Lançamento excluído.', 'info')
+  }
+
+  const handleDeleteFromModal = async () => {
+    if (!editing) return
+    await handleDelete(editing)
+    setModalOpen(false)
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Fluxo de Caixa"
         subtitle="Acompanhe entradas, saídas e a evolução do seu saldo ao longo do tempo."
+        action={
+          <Button onClick={openNew}>
+            <Plus size={16} /> Novo lançamento
+          </Button>
+        }
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatTile
-          label="Entradas do mês"
-          value={formatCurrency(monthSummary.entradas)}
-          icon={TrendingUp}
-          accent="var(--color-cat-teal)"
-          deltaLabel="3,7% que julho"
-          deltaDirection="up"
-        />
-        <StatTile
-          label="Saídas do mês"
-          value={formatCurrency(monthSummary.saidas)}
-          icon={TrendingDown}
-          accent="var(--color-cat-rose)"
-          deltaLabel="9,8% que julho"
-          deltaDirection="up"
-        />
+        <StatTile label="Entradas do mês" value={formatCurrency(monthSummary.entradas)} icon={TrendingUp} accent="var(--color-cat-teal)" />
+        <StatTile label="Saídas do mês" value={formatCurrency(monthSummary.saidas)} icon={TrendingDown} accent="var(--color-cat-rose)" />
         <StatTile
           label="Resultado do mês"
           value={formatCurrency(monthSummary.resultado)}
           icon={Scale}
-          accent="var(--color-status-good)"
-          deltaLabel="Saldo positivo"
-          deltaDirection="up"
+          accent={monthSummary.resultado >= 0 ? 'var(--color-status-good)' : 'var(--color-status-critical)'}
         />
       </div>
 
@@ -73,7 +129,17 @@ export default function CashFlow() {
         >
           Entradas, saídas e saldo acumulado
         </CardTitle>
-        <CashFlowChart data={data} height={340} />
+        {transactions.length === 0 ? (
+          <EmptyState
+            icon={ArrowLeftRight}
+            title="Nenhum lançamento ainda"
+            description="Registre entradas e saídas para acompanhar sua evolução aqui."
+            actionLabel="+ Novo lançamento"
+            onAction={openNew}
+          />
+        ) : (
+          <CashFlowChart data={data} height={340} />
+        )}
       </Card>
 
       <Card padded={false}>
@@ -81,9 +147,34 @@ export default function CashFlow() {
           <CardTitle>Todos os lançamentos</CardTitle>
         </div>
         <div className="p-5 pt-0 lg:p-6 lg:pt-0">
-          <TransactionsTable transactions={transactions} />
+          {sortedTransactions.length === 0 ? (
+            <EmptyState
+              icon={ArrowLeftRight}
+              title="Nenhum lançamento cadastrado"
+              description="Comece registrando sua primeira entrada ou saída."
+              actionLabel="+ Novo lançamento"
+              onAction={openNew}
+            />
+          ) : (
+            <TransactionsTable
+              transactions={sortedTransactions}
+              costCenters={costCenters}
+              onEdit={openEdit}
+              onDelete={handleDelete}
+            />
+          )}
         </div>
       </Card>
+
+      <TransactionFormModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onSubmit={handleSubmit}
+        onDelete={editing ? handleDeleteFromModal : undefined}
+        accounts={accounts}
+        costCenters={costCenters}
+        transaction={editing}
+      />
     </div>
   )
 }

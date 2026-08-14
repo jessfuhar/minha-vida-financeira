@@ -1,13 +1,13 @@
 /**
- * Tipos compartilhados dos dados fictícios usados nesta fase.
+ * Tipos compartilhados usados em mais de um lugar da interface.
  *
- * Nada aqui é persistido ou lido de um banco de dados — são apenas
- * estruturas em memória para dar forma à interface. A forma foi pensada
- * para já comportar, na fase 2, a leitura real de extratos (OFX/CSV/PDF)
- * sem precisar redesenhar as telas.
+ * Os modelos de dados persistidos (contas, lançamentos, centros de custo,
+ * contas a pagar, metas, perfil) vivem em `src/db/models.ts`. Este arquivo
+ * guarda apenas tipos auxiliares de exibição — enums de rótulo/status e a
+ * forma das notificações, que continuam ilustrativas nesta fase.
  */
 
-/** Tipos de lançamento que o sistema deverá diferenciar futuramente. */
+/** Tipos de lançamento que o sistema diferencia visualmente. */
 export type TransactionKind =
   | 'pix_enviado'
   | 'pix_recebido'
@@ -24,61 +24,8 @@ export type TransactionDirection = 'entrada' | 'saida'
 
 export type TransactionStatus = 'classificado' | 'aguardando_classificacao' | 'conciliado'
 
-export interface Transaction {
-  id: string
-  date: string // ISO yyyy-mm-dd
-  description: string
-  kind: TransactionKind
-  direction: TransactionDirection
-  amount: number
-  accountId: string
-  costCenter: string
-  category: string
-  status: TransactionStatus
-}
-
-export interface BankAccount {
-  id: string
-  bank: string
-  nickname?: string
-  type: 'corrente' | 'poupanca' | 'digital'
-  balance: number
-  colorFrom: string
-  colorTo: string
-  logoInitial: string
-}
-
+/** Status de exibição de uma conta a pagar — "vencida" é sempre calculado, nunca gravado. */
 export type BillStatus = 'pendente' | 'paga' | 'vencida'
-
-export interface Bill {
-  id: string
-  name: string
-  amount: number
-  dueDate: string
-  category: string
-  costCenter: string
-  status: BillStatus
-}
-
-export interface SavingsGoal {
-  id: string
-  name: string
-  emoji: string
-  target: number
-  saved: number
-  color: string
-  monthlyContribution: number
-  deadline?: string
-}
-
-export interface CostCenter {
-  id: string
-  name: string
-  emoji: string
-  categories: string[]
-  monthlySpend: number
-  color: string
-}
 
 export type AlertLevel = 'info' | 'atencao' | 'urgente'
 
@@ -89,12 +36,7 @@ export interface AttentionAlert {
   description?: string
 }
 
-export type NotificationType =
-  | 'classificacao'
-  | 'vencimento'
-  | 'vencida'
-  | 'saldo'
-  | 'cofrinho'
+export type NotificationType = 'classificacao' | 'vencimento' | 'vencida' | 'saldo' | 'cofrinho'
 
 export interface AppNotification {
   id: string

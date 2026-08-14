@@ -8,7 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import type { CashFlowPoint } from '../../data/cashflow'
+import type { CashFlowSeriesPoint as CashFlowPoint } from '../../lib/aggregations'
 import { ChartTooltip } from './ChartTooltip'
 import { formatCompactCurrency } from '../../lib/format'
 

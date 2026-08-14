@@ -1,10 +1,14 @@
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { DataProvider } from './context/DataContext'
+import { ToastProvider } from './components/ui/Toast'
+import { ConfirmProvider } from './components/ui/Confirm'
 import { AppShell } from './components/layout/AppShell'
 import Dashboard from './pages/Dashboard'
 import CashFlow from './pages/CashFlow'
 import BillsToPay from './pages/BillsToPay'
 import PiggyBank from './pages/PiggyBank'
 import CostCenters from './pages/CostCenters'
+import SpendingGoals from './pages/SpendingGoals'
 import Reports from './pages/Reports'
 import Search from './pages/Search'
 import Notifications from './pages/Notifications'
@@ -18,22 +22,29 @@ import Settings from './pages/Settings'
 // navegar entre as telas continua idêntico.
 function App() {
   return (
-    <MemoryRouter initialEntries={['/']}>
-      <Routes>
-        <Route element={<AppShell />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/fluxo-de-caixa" element={<CashFlow />} />
-          <Route path="/contas-a-pagar" element={<BillsToPay />} />
-          <Route path="/cofrinho" element={<PiggyBank />} />
-          <Route path="/centros-de-custo" element={<CostCenters />} />
-          <Route path="/relatorios" element={<Reports />} />
-          <Route path="/buscar" element={<Search />} />
-          <Route path="/notificacoes" element={<Notifications />} />
-          <Route path="/perfil" element={<Profile />} />
-          <Route path="/configuracoes" element={<Settings />} />
-        </Route>
-      </Routes>
-    </MemoryRouter>
+    <DataProvider>
+      <ToastProvider>
+        <ConfirmProvider>
+          <MemoryRouter initialEntries={['/']}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/fluxo-de-caixa" element={<CashFlow />} />
+                <Route path="/contas-a-pagar" element={<BillsToPay />} />
+                <Route path="/cofrinho" element={<PiggyBank />} />
+                <Route path="/centros-de-custo" element={<CostCenters />} />
+                <Route path="/metas" element={<SpendingGoals />} />
+                <Route path="/relatorios" element={<Reports />} />
+                <Route path="/buscar" element={<Search />} />
+                <Route path="/notificacoes" element={<Notifications />} />
+                <Route path="/perfil" element={<Profile />} />
+                <Route path="/configuracoes" element={<Settings />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </ConfirmProvider>
+      </ToastProvider>
+    </DataProvider>
   )
 }
 

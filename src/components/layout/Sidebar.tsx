@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { sidebarItems, sidebarFooterItem } from '../../config/navigation'
 import { brand, greeting } from '../../config/brand'
+import { useData } from '../../context/DataContext'
 import { X } from 'lucide-react'
 
 interface SidebarProps {
@@ -44,11 +45,26 @@ function NavRow({ item, onClick }: { item: (typeof sidebarItems)[number]; onClic
 }
 
 export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
+  const { profile } = useData()
+
   const content = (
     <div className="flex h-full flex-col">
       <div className="px-5 pb-6 pt-7">
-        <div className="flex items-center justify-between">
-          <p className="font-display text-[17px] font-semibold text-neutral-900">{greeting()}</p>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2.5">
+            {profile.photoDataUrl ? (
+              <img
+                src={profile.photoDataUrl}
+                alt=""
+                className="h-8 w-8 shrink-0 rounded-full object-cover"
+              />
+            ) : (
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-rose-300 to-rose-600 text-[13px] font-semibold text-white">
+                {profile.name.charAt(0).toUpperCase()}
+              </span>
+            )}
+            <p className="truncate font-display text-[16px] font-semibold text-neutral-900">{greeting(profile.name)}</p>
+          </div>
           <button
             onClick={onClose}
             className="rounded-lg p-1 text-neutral-400 hover:bg-neutral-100 lg:hidden"
@@ -57,7 +73,7 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
             <X size={18} />
           </button>
         </div>
-        <p className="mt-1 text-[13px] text-neutral-500">{brand.appName}</p>
+        <p className="mt-1.5 text-[13px] text-neutral-500">{brand.appName}</p>
       </div>
 
       <nav className="flex-1 space-y-1 px-3">

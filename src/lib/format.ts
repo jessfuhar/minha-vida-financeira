@@ -41,9 +41,30 @@ export function formatCompactCurrency(value: number): string {
   return formatCurrency(value)
 }
 
-export function daysUntil(iso: string): number {
-  const today = new Date('2026-08-13')
-  const target = new Date(iso)
-  const diff = target.getTime() - today.getTime()
-  return Math.round(diff / (1000 * 60 * 60 * 24))
+/**
+ * Converte texto digitado num campo de valor em número. Aceita tanto o
+ * formato brasileiro (1.234,56) quanto ponto decimal simples (1234.56).
+ */
+export function parseCurrencyInput(raw: string): number {
+  let s = raw.trim().replace(/[^\d,.-]/g, '')
+  if (s === '') return NaN
+  const hasComma = s.includes(',')
+  const hasDot = s.includes('.')
+  if (hasComma && hasDot) {
+    s = s.replace(/\./g, '').replace(',', '.')
+  } else if (hasComma) {
+    s = s.replace(',', '.')
+  } else if (hasDot) {
+    const parts = s.split('.')
+    if (parts.length > 2) {
+      s = parts.join('')
+    }
+  }
+  return Number(s)
+}
+
+/** True se o texto digitado representa um valor monetário válido (aceita BRL e ponto decimal). */
+export function isValidCurrencyInput(raw: string): boolean {
+  if (raw.trim() === '') return false
+  return !Number.isNaN(parseCurrencyInput(raw))
 }

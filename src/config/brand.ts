@@ -13,10 +13,11 @@ export const brand = {
   appShortName: 'MVF',
   /** Frase de identidade usada na barra lateral / telas de boas-vindas. */
   tagline: 'Vamos cuidar da sua vida financeira?',
-  /** Nome da usuária (dado fictício, fase 1). */
-  userName: 'Jéssica',
+  /** Nome padrão sugerido antes da usuária editar o perfil. */
+  userName: 'você',
   /** Emoji/assinatura usada ao lado das saudações. */
   greetingEmoji: '🌷',
 } as const
 
-export const greeting = () => `Olá, ${brand.userName}! ${brand.greetingEmoji}`
+/** Saudação com o nome cadastrado no Perfil (ver DataContext/profile). */
+export const greeting = (name: string = brand.userName) => `Olá, ${name}! ${brand.greetingEmoji}`

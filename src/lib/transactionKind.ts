@@ -18,6 +18,11 @@ export interface TransactionKindMeta {
   colorVar: string
 }
 
+export const kindsByDirection: Record<'entrada' | 'saida', TransactionKind[]> = {
+  entrada: ['pix_recebido', 'transferencia_recebida', 'deposito', 'outros'],
+  saida: ['pix_enviado', 'transferencia_enviada', 'boleto', 'cartao_credito', 'debito', 'saque', 'outros'],
+}
+
 export const transactionKindMeta: Record<TransactionKind, TransactionKindMeta> = {
   pix_enviado: { label: 'Pix enviado', icon: ArrowUpRight, colorVar: 'var(--color-cat-rose)' },
   pix_recebido: { label: 'Pix recebido', icon: ArrowDownLeft, colorVar: 'var(--color-cat-teal)' },

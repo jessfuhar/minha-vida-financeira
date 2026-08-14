@@ -2,13 +2,21 @@ import { useMemo, useState } from 'react'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
+import { EmptyState } from '../components/ui/EmptyState'
 import { BillStatusPill } from '../components/ui/StatusPill'
-import { bills } from '../data/bills'
-import { formatCurrency, formatDate, daysUntil } from '../lib/format'
-import { Plus } from 'lucide-react'
-import type { BillStatus } from '../data/types'
+import { BillFormModal, type BillFormValues } from '../components/bills/BillFormModal'
+import { MarkPaidModal } from '../components/bills/MarkPaidModal'
+import { useToast } from '../components/ui/Toast'
+import { useConfirm } from '../components/ui/Confirm'
+import { useData } from '../context/DataContext'
+import { resolveCostCenterName, resolveCategoryName } from '../components/transactions/TransactionsTable'
+import { formatCurrency, formatDate, parseCurrencyInput } from '../lib/format'
+import { daysUntil, getBillDisplayStatus, todayIso } from '../lib/aggregations'
+import { Plus, Pencil, Trash2, CheckCircle2, ReceiptText, Repeat } from 'lucide-react'
+import type { Bill } from '../db/models'
+import type { BillStatus as DisplayBillStatus } from '../data/types'
 
-const filters: { id: 'todas' | BillStatus; label: string }[] = [
+const filters: { id: 'todas' | DisplayBillStatus; label: string }[] = [
   { id: 'todas', label: 'Todas' },
   { id: 'pendente', label: 'Pendentes' },
   { id: 'paga', label: 'Pagas' },
@@ -16,19 +24,75 @@ const filters: { id: 'todas' | BillStatus; label: string }[] = [
 ]
 
 export default function BillsToPay() {
+  const { accounts, costCenters, bills, addBill, updateBill, deleteBill, markBillPaid } = useData()
+  const toast = useToast()
+  const confirm = useConfirm()
+
   const [active, setActive] = useState<(typeof filters)[number]['id']>('todas')
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing] = useState<Bill | null>(null)
+  const [payingBill, setPayingBill] = useState<Bill | null>(null)
+
+  const displayStatus = (b: Bill) => getBillDisplayStatus(b)
 
   const filtered = useMemo(
-    () => (active === 'todas' ? bills : bills.filter((b) => b.status === active)),
-    [active],
+    () => (active === 'todas' ? bills : bills.filter((b) => displayStatus(b) === active)),
+    [active, bills],
   )
 
   const totals = useMemo(() => {
-    const pendente = bills.filter((b) => b.status === 'pendente').reduce((s, b) => s + b.amount, 0)
-    const vencida = bills.filter((b) => b.status === 'vencida').reduce((s, b) => s + b.amount, 0)
+    const pendente = bills.filter((b) => displayStatus(b) === 'pendente').reduce((s, b) => s + b.amount, 0)
+    const vencida = bills.filter((b) => displayStatus(b) === 'vencida').reduce((s, b) => s + b.amount, 0)
     const paga = bills.filter((b) => b.status === 'paga').reduce((s, b) => s + b.amount, 0)
     return { pendente, vencida, paga }
-  }, [])
+  }, [bills])
+
+  const openNew = () => {
+    setEditing(null)
+    setModalOpen(true)
+  }
+  const openEdit = (b: Bill) => {
+    setEditing(b)
+    setModalOpen(true)
+  }
+
+  const handleSubmit = async (values: BillFormValues) => {
+    const payload = {
+      name: values.name.trim(),
+      originalDescription: values.originalDescription.trim() || undefined,
+      amount: parseCurrencyInput(values.amount),
+      dueDate: values.dueDate,
+      accountId: values.accountId || null,
+      costCenterId: values.costCenterId || null,
+      categoryId: values.categoryId || null,
+      recurring: values.recurring,
+    }
+    if (editing) {
+      await updateBill(editing.id, payload)
+      toast.show('Conta atualizada.')
+    } else {
+      await addBill(payload)
+      toast.show('Conta a pagar criada.')
+    }
+  }
+
+  const handleDelete = async (b: Bill) => {
+    const ok = await confirm({
+      title: 'Excluir conta a pagar',
+      description: `Excluir "${b.name}"? Essa ação não pode ser desfeita.`,
+      confirmLabel: 'Excluir',
+      danger: true,
+    })
+    if (!ok) return
+    await deleteBill(b.id)
+    toast.show('Conta excluída.', 'info')
+  }
+
+  const handleConfirmPaid = async (opts: { createTransaction: boolean; accountId?: string }) => {
+    if (!payingBill) return
+    await markBillPaid(payingBill.id, { ...opts, date: todayIso() })
+    toast.show('Conta marcada como paga.')
+  }
 
   return (
     <div className="space-y-6">
@@ -36,7 +100,7 @@ export default function BillsToPay() {
         title="Contas a Pagar"
         subtitle="Suas contas fixas e variáveis, com vencimento e status."
         action={
-          <Button size="sm">
+          <Button size="sm" onClick={openNew}>
             <Plus size={16} /> Nova conta
           </Button>
         }
@@ -59,7 +123,7 @@ export default function BillsToPay() {
         </Card>
         <Card className="flex items-center justify-between">
           <div>
-            <p className="text-[13px] text-neutral-500">Pagas no mês</p>
+            <p className="text-[13px] text-neutral-500">Pagas</p>
             <p className="mt-1 font-display text-[19px] font-semibold" style={{ color: 'var(--color-status-good)' }}>
               {formatCurrency(totals.paga)}
             </p>
@@ -83,11 +147,19 @@ export default function BillsToPay() {
           ))}
         </div>
 
-        <div className="-mx-0 overflow-x-auto p-5 pt-4 lg:p-6 lg:pt-4">
-          {filtered.length === 0 ? (
+        <div className="overflow-x-auto p-5 pt-4 lg:p-6 lg:pt-4">
+          {bills.length === 0 ? (
+            <EmptyState
+              icon={ReceiptText}
+              title="Nenhuma conta a pagar cadastrada"
+              description="Cadastre suas contas fixas e variáveis para acompanhar os vencimentos."
+              actionLabel="+ Nova conta"
+              onAction={openNew}
+            />
+          ) : filtered.length === 0 ? (
             <p className="py-10 text-center text-[14px] text-neutral-500">Nenhuma conta nesse filtro.</p>
           ) : (
-            <table className="w-full min-w-[720px] border-collapse text-left">
+            <table className="w-full min-w-[820px] border-collapse text-left">
               <thead>
                 <tr className="text-[12px] uppercase tracking-wide text-neutral-400">
                   <th className="pb-3 pr-4 font-medium">Conta</th>
@@ -95,30 +167,74 @@ export default function BillsToPay() {
                   <th className="pb-3 pr-4 font-medium">Vencimento</th>
                   <th className="pb-3 pr-4 font-medium">Categoria</th>
                   <th className="pb-3 pr-4 font-medium">Centro de custo</th>
-                  <th className="pb-3 font-medium">Status</th>
+                  <th className="pb-3 pr-4 font-medium">Status</th>
+                  <th className="pb-3 font-medium">Ações</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((b) => {
+                  const status = displayStatus(b)
                   const days = daysUntil(b.dueDate)
                   return (
                     <tr key={b.id} className="border-t border-[var(--border-hairline)] text-[13.5px]">
-                      <td className="py-3 pr-4 font-medium text-neutral-800">{b.name}</td>
+                      <td className="py-3 pr-4">
+                        <span className="inline-flex items-center gap-1.5 font-medium text-neutral-800">
+                          {b.name}
+                          {b.recurring && <Repeat size={12} className="text-neutral-400" aria-label="Recorrente" />}
+                        </span>
+                        {b.originalDescription && (
+                          <p className="mt-0.5 truncate text-[11.5px] text-neutral-400">{b.originalDescription}</p>
+                        )}
+                      </td>
                       <td className="whitespace-nowrap py-3 pr-4 font-semibold tabular-nums text-neutral-900">
                         {formatCurrency(b.amount)}
                       </td>
                       <td className="whitespace-nowrap py-3 pr-4 text-neutral-600">
                         {formatDate(b.dueDate)}
-                        {b.status === 'pendente' && days <= 3 && days >= 0 && (
+                        {status === 'pendente' && days <= 3 && days >= 0 && (
                           <span className="ml-2 text-[11.5px] font-medium" style={{ color: 'var(--color-status-serious)' }}>
                             {days === 0 ? 'vence hoje' : `em ${days}d`}
                           </span>
                         )}
                       </td>
-                      <td className="whitespace-nowrap py-3 pr-4 text-neutral-600">{b.category}</td>
-                      <td className="whitespace-nowrap py-3 pr-4 text-neutral-600">{b.costCenter}</td>
+                      <td className="whitespace-nowrap py-3 pr-4 text-neutral-600">
+                        {resolveCategoryName(costCenters, b.costCenterId, b.categoryId)}
+                      </td>
+                      <td className="whitespace-nowrap py-3 pr-4 text-neutral-600">
+                        {resolveCostCenterName(costCenters, b.costCenterId)}
+                      </td>
+                      <td className="py-3 pr-4">
+                        <BillStatusPill status={status} />
+                      </td>
                       <td className="py-3">
-                        <BillStatusPill status={b.status} />
+                        <div className="flex items-center gap-1">
+                          {status !== 'paga' && (
+                            <button
+                              type="button"
+                              onClick={() => setPayingBill(b)}
+                              className="rounded-lg p-1.5 text-neutral-400 transition-colors hover:bg-[var(--color-status-good-bg)] hover:text-[var(--color-status-good)]"
+                              aria-label="Marcar como paga"
+                            >
+                              <CheckCircle2 size={14} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => openEdit(b)}
+                            className="rounded-lg p-1.5 text-neutral-400 transition-colors hover:bg-rose-50 hover:text-rose-700"
+                            aria-label="Editar conta"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(b)}
+                            className="rounded-lg p-1.5 text-neutral-400 transition-colors hover:bg-[var(--color-status-critical-bg)] hover:text-[var(--color-status-critical)]"
+                            aria-label="Excluir conta"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )
@@ -128,6 +244,31 @@ export default function BillsToPay() {
           )}
         </div>
       </Card>
+
+      <BillFormModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onSubmit={handleSubmit}
+        onDelete={
+          editing
+            ? () => {
+                setModalOpen(false)
+                handleDelete(editing)
+              }
+            : undefined
+        }
+        accounts={accounts}
+        costCenters={costCenters}
+        bill={editing}
+      />
+
+      <MarkPaidModal
+        open={payingBill !== null}
+        onClose={() => setPayingBill(null)}
+        onConfirm={handleConfirmPaid}
+        bill={payingBill}
+        accounts={accounts}
+      />
     </div>
   )
 }
