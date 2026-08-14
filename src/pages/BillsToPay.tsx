@@ -6,12 +6,15 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { BillStatusPill } from '../components/ui/StatusPill'
 import { BillFormModal, type BillFormValues } from '../components/bills/BillFormModal'
 import { MarkPaidModal } from '../components/bills/MarkPaidModal'
+import { BulkClassifyModal } from '../components/transactions/BulkClassifyModal'
+import { BulkActionBar } from '../components/ui/BulkActionBar'
 import { useToast } from '../components/ui/Toast'
 import { useConfirm } from '../components/ui/Confirm'
 import { useData } from '../context/DataContext'
 import { resolveCostCenterName, resolveCategoryName } from '../components/transactions/TransactionsTable'
 import { formatCurrency, formatDate, parseCurrencyInput } from '../lib/format'
 import { daysUntil, getBillDisplayStatus, todayIso } from '../lib/aggregations'
+import { useSelection } from '../lib/useSelection'
 import { Plus, Pencil, Trash2, CheckCircle2, ReceiptText, Repeat } from 'lucide-react'
 import type { Bill } from '../db/models'
 import type { BillStatus as DisplayBillStatus } from '../data/types'
@@ -24,14 +27,16 @@ const filters: { id: 'todas' | DisplayBillStatus; label: string }[] = [
 ]
 
 export default function BillsToPay() {
-  const { accounts, costCenters, bills, addBill, updateBill, deleteBill, markBillPaid } = useData()
+  const { accounts, costCenters, bills, addBill, updateBill, deleteBill, bulkUpdateBills, bulkDeleteBills, markBillPaid } = useData()
   const toast = useToast()
   const confirm = useConfirm()
+  const selection = useSelection()
 
   const [active, setActive] = useState<(typeof filters)[number]['id']>('todas')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Bill | null>(null)
   const [payingBill, setPayingBill] = useState<Bill | null>(null)
+  const [bulkModal, setBulkModal] = useState<'categoria' | 'centroDeCusto' | null>(null)
 
   const displayStatus = (b: Bill) => getBillDisplayStatus(b)
 
@@ -93,6 +98,31 @@ export default function BillsToPay() {
     await markBillPaid(payingBill.id, { ...opts, date: todayIso() })
     toast.show('Conta marcada como paga.')
   }
+
+  // ---------- Ações em massa ----------
+  const handleBulkClassify = async (value: { costCenterId: string | null; categoryId: string | null }) => {
+    const ids = selection.selectedIds
+    await bulkUpdateBills(ids, value)
+    toast.show(`${ids.length} conta${ids.length === 1 ? '' : 's'} atualizada${ids.length === 1 ? '' : 's'}.`)
+    selection.clear()
+  }
+
+  const handleBulkDelete = async () => {
+    const ids = selection.selectedIds
+    const ok = await confirm({
+      title: 'Excluir contas a pagar',
+      description: `Tem certeza de que deseja excluir ${ids.length} conta${ids.length === 1 ? '' : 's'}? Essa ação não pode ser desfeita.`,
+      confirmLabel: 'Excluir',
+      danger: true,
+    })
+    if (!ok) return
+    await bulkDeleteBills(ids)
+    toast.show(`${ids.length} conta${ids.length === 1 ? '' : 's'} excluída${ids.length === 1 ? '' : 's'}.`, 'info')
+    selection.clear()
+  }
+
+  const filteredIds = filtered.map((b) => b.id)
+  const allFilteredSelected = selection.isAllSelected(filteredIds)
 
   return (
     <div className="space-y-6">
@@ -162,6 +192,14 @@ export default function BillsToPay() {
             <table className="w-full min-w-[820px] border-collapse text-left">
               <thead>
                 <tr className="text-[12px] uppercase tracking-wide text-neutral-400">
+                  <th className="w-8 pb-3 pr-2 font-medium">
+                    <input
+                      type="checkbox"
+                      aria-label="Selecionar todos"
+                      checked={allFilteredSelected}
+                      onChange={(e) => selection.toggleAll(filteredIds, e.target.checked)}
+                    />
+                  </th>
                   <th className="pb-3 pr-4 font-medium">Conta</th>
                   <th className="pb-3 pr-4 font-medium">Valor</th>
                   <th className="pb-3 pr-4 font-medium">Vencimento</th>
@@ -177,6 +215,14 @@ export default function BillsToPay() {
                   const days = daysUntil(b.dueDate)
                   return (
                     <tr key={b.id} className="border-t border-[var(--border-hairline)] text-[13.5px]">
+                      <td className="py-3 pr-2">
+                        <input
+                          type="checkbox"
+                          aria-label={`Selecionar ${b.name}`}
+                          checked={selection.selected.has(b.id)}
+                          onChange={() => selection.toggle(b.id)}
+                        />
+                      </td>
                       <td className="py-3 pr-4">
                         <span className="inline-flex items-center gap-1.5 font-medium text-neutral-800">
                           {b.name}
@@ -244,6 +290,27 @@ export default function BillsToPay() {
           )}
         </div>
       </Card>
+
+      <BulkActionBar count={selection.selectedCount} onClear={selection.clear}>
+        <Button size="sm" variant="secondary" onClick={() => setBulkModal('categoria')}>
+          Categoria
+        </Button>
+        <Button size="sm" variant="secondary" onClick={() => setBulkModal('centroDeCusto')}>
+          Centro de custo
+        </Button>
+        <Button size="sm" className="!bg-[var(--color-status-critical)] hover:!bg-[var(--color-status-critical)]" onClick={handleBulkDelete}>
+          Excluir
+        </Button>
+      </BulkActionBar>
+
+      <BulkClassifyModal
+        open={bulkModal === 'categoria' || bulkModal === 'centroDeCusto'}
+        onClose={() => setBulkModal(null)}
+        mode={bulkModal === 'categoria' ? 'categoria' : 'centroDeCusto'}
+        count={selection.selectedCount}
+        costCenters={costCenters}
+        onConfirm={handleBulkClassify}
+      />
 
       <BillFormModal
         open={modalOpen}

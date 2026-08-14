@@ -12,9 +12,18 @@ import { openDB, type IDBPDatabase } from 'idb'
  */
 
 const DB_NAME = 'minha-vida-financeira'
-const DB_VERSION = 2
+const DB_VERSION = 3
 
-export const STORES = ['accounts', 'transactions', 'costCenters', 'bills', 'goals', 'goalContributions', 'plannedItems'] as const
+export const STORES = [
+  'accounts',
+  'transactions',
+  'costCenters',
+  'bills',
+  'goals',
+  'goalContributions',
+  'plannedItems',
+  'classificationRules',
+] as const
 export type StoreName = (typeof STORES)[number]
 
 interface WithId {
@@ -33,6 +42,7 @@ const memoryStores: Record<StoreName, Map<string, WithId>> = {
   goals: new Map(),
   goalContributions: new Map(),
   plannedItems: new Map(),
+  classificationRules: new Map(),
 }
 
 function hasIndexedDb(): boolean {

@@ -16,6 +16,7 @@ export interface TransactionFormValues {
   date: string
   description: string
   originalDescription: string
+  counterparty: string
   document: string
   accountId: string
   costCenterId: string
@@ -31,6 +32,7 @@ function emptyValues(accounts: Account[]): TransactionFormValues {
     date: todayIso(),
     description: '',
     originalDescription: '',
+    counterparty: '',
     document: '',
     accountId: accounts[0]?.id ?? '',
     costCenterId: '',
@@ -42,8 +44,9 @@ function emptyValues(accounts: Account[]): TransactionFormValues {
 interface TransactionFormModalProps {
   open: boolean
   onClose: () => void
-  onSubmit: (values: TransactionFormValues) => Promise<void>
+  onSubmit: (values: TransactionFormValues, saveAsRule: boolean) => Promise<void>
   onDelete?: () => void
+  onUnlinkTransfer?: () => void
   accounts: Account[]
   costCenters: CostCenter[]
   transaction?: Transaction | null
@@ -54,6 +57,7 @@ export function TransactionFormModal({
   onClose,
   onSubmit,
   onDelete,
+  onUnlinkTransfer,
   accounts,
   costCenters,
   transaction,
@@ -61,6 +65,7 @@ export function TransactionFormModal({
   const [values, setValues] = useState<TransactionFormValues>(() => emptyValues(accounts))
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [saveAsRule, setSaveAsRule] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -72,6 +77,7 @@ export function TransactionFormModal({
         date: transaction.date,
         description: transaction.description,
         originalDescription: transaction.originalDescription ?? '',
+        counterparty: transaction.counterparty ?? '',
         document: transaction.document ?? '',
         accountId: transaction.accountId,
         costCenterId: transaction.costCenterId ?? '',
@@ -81,6 +87,7 @@ export function TransactionFormModal({
     } else {
       setValues(emptyValues(accounts))
     }
+    setSaveAsRule(false)
     setError('')
   }, [open, transaction, accounts])
 
@@ -104,7 +111,7 @@ export function TransactionFormModal({
     setError('')
     setSaving(true)
     try {
-      await onSubmit(values)
+      await onSubmit(values, saveAsRule)
       onClose()
     } finally {
       setSaving(false)
@@ -126,6 +133,11 @@ export function TransactionFormModal({
               Excluir
             </Button>
           )}
+          {transaction?.transferId && onUnlinkTransfer && (
+            <Button variant="ghost" size="sm" onClick={onUnlinkTransfer}>
+              Desvincular transferência
+            </Button>
+          )}
           <Button variant="ghost" size="sm" onClick={onClose}>
             Cancelar
           </Button>
@@ -144,6 +156,12 @@ export function TransactionFormModal({
           {transaction?.source === 'importado' && (
             <div className="rounded-xl bg-[var(--color-neutral-100)] px-3.5 py-2.5 text-[12.5px] text-neutral-600">
               Origem: Importado de extrato — todos os campos abaixo continuam editáveis normalmente.
+            </div>
+          )}
+
+          {transaction?.transferId && (
+            <div className="rounded-xl bg-[var(--color-neutral-100)] px-3.5 py-2.5 text-[12.5px] text-neutral-600">
+              Esta movimentação faz parte de uma transferência entre contas próprias vinculada.
             </div>
           )}
 
@@ -190,18 +208,27 @@ export function TransactionFormModal({
               <TextInput
                 value={values.originalDescription}
                 onChange={(e) => setValues((v) => ({ ...v, originalDescription: e.target.value }))}
-                placeholder="Ex.: COPEL DISTRIBUICAO S.A."
+                placeholder="Ex.: PIX ENVIADO 02/08 22:36 COPEL DISTRIBUICAO S.A."
               />
             </Field>
           </div>
 
-          <Field label="Documento / identificador (opcional)" hint="Nº do documento, comprovante ou identificador do extrato">
-            <TextInput
-              value={values.document}
-              onChange={(e) => setValues((v) => ({ ...v, document: e.target.value }))}
-              placeholder="Ex.: 000123456789"
-            />
-          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Contraparte (pessoa/empresa, opcional)" hint="Para quem foi enviado ou de quem foi recebido">
+              <TextInput
+                value={values.counterparty}
+                onChange={(e) => setValues((v) => ({ ...v, counterparty: e.target.value }))}
+                placeholder="Ex.: COPEL DISTRIBUICAO S.A."
+              />
+            </Field>
+            <Field label="Documento / identificador (opcional)" hint="Nº do documento, comprovante ou identificador do extrato">
+              <TextInput
+                value={values.document}
+                onChange={(e) => setValues((v) => ({ ...v, document: e.target.value }))}
+                placeholder="Ex.: 000123456789"
+              />
+            </Field>
+          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Conta bancária" required error={error.includes('conta') ? error : undefined}>
@@ -253,6 +280,17 @@ export function TransactionFormModal({
               </Select>
             </Field>
           </div>
+
+          {values.counterparty.trim() && values.costCenterId && (
+            <label className="flex items-start gap-2.5 rounded-xl bg-[var(--color-neutral-100)] px-3.5 py-3 text-[13px] text-neutral-600">
+              <input type="checkbox" checked={saveAsRule} onChange={(e) => setSaveAsRule(e.target.checked)} className="mt-0.5" />
+              <span>
+                Salvar como regra para movimentações semelhantes — da próxima vez que{' '}
+                <strong className="font-medium text-neutral-800">{values.counterparty.trim()}</strong> aparecer numa importação, a
+                categoria e o centro de custo serão sugeridos automaticamente.
+              </span>
+            </label>
+          )}
 
           <Field label="Observação (opcional)">
             <Textarea

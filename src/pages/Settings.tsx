@@ -1,5 +1,8 @@
+import { useState } from 'react'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Card } from '../components/ui/Card'
+import { ClassificationRulesModal } from '../components/settings/ClassificationRulesModal'
+import { useData } from '../context/DataContext'
 import { brand } from '../config/brand'
 import {
   Tags,
@@ -16,23 +19,26 @@ const sections = [
   {
     title: 'Dados financeiros',
     items: [
-      { icon: Tags, label: 'Categorias', description: 'Crie e edite as categorias de gasto e receita.' },
-      { icon: Layers, label: 'Centros de custo', description: 'Organize as grandes áreas da sua vida financeira.' },
-      { icon: Zap, label: 'Regras automáticas', description: 'Classifique lançamentos futuros automaticamente.' },
-      { icon: Landmark, label: 'Contas bancárias', description: 'Gerencie as contas conectadas ao sistema.' },
+      { key: 'categorias', icon: Tags, label: 'Categorias', description: 'Crie e edite as categorias de gasto e receita.' },
+      { key: 'centros', icon: Layers, label: 'Centros de custo', description: 'Organize as grandes áreas da sua vida financeira.' },
+      { key: 'regras', icon: Zap, label: 'Regras automáticas', description: 'Classifique lançamentos futuros automaticamente.' },
+      { key: 'contas', icon: Landmark, label: 'Contas bancárias', description: 'Gerencie as contas conectadas ao sistema.' },
     ],
   },
   {
     title: 'Sistema',
     items: [
-      { icon: SlidersHorizontal, label: 'Preferências', description: 'Aparência, moeda e formato de datas.' },
-      { icon: DatabaseBackup, label: 'Backup', description: 'Cópias de segurança dos seus dados.' },
-      { icon: FileDown, label: 'Exportação', description: 'Exporte seus dados em planilha ou PDF.' },
+      { key: 'preferencias', icon: SlidersHorizontal, label: 'Preferências', description: 'Aparência, moeda e formato de datas.' },
+      { key: 'backup', icon: DatabaseBackup, label: 'Backup', description: 'Cópias de segurança dos seus dados.' },
+      { key: 'exportacao', icon: FileDown, label: 'Exportação', description: 'Exporte seus dados em planilha ou PDF.' },
     ],
   },
 ]
 
 export default function Settings() {
+  const { classificationRules, costCenters, updateClassificationRule, deleteClassificationRule } = useData()
+  const [rulesOpen, setRulesOpen] = useState(false)
+
   return (
     <div className="space-y-6">
       <PageHeader title="Configurações" subtitle={`Estrutura preparada para as próximas fases de ${brand.appName}.`} />
@@ -47,6 +53,7 @@ export default function Settings() {
               <li key={item.label}>
                 <button
                   type="button"
+                  onClick={item.key === 'regras' ? () => setRulesOpen(true) : undefined}
                   className="flex w-full items-center gap-3.5 px-5 py-4 text-left transition-colors hover:bg-rose-50/50 lg:px-6"
                 >
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
@@ -56,9 +63,16 @@ export default function Settings() {
                     <p className="text-[14px] font-medium text-neutral-800">{item.label}</p>
                     <p className="mt-0.5 text-[12.5px] text-neutral-500">{item.description}</p>
                   </div>
-                  <span className="shrink-0 rounded-full bg-[var(--color-neutral-100)] px-2.5 py-1 text-[11px] font-medium text-neutral-500">
-                    Fase 2
-                  </span>
+                  {item.key === 'regras' && classificationRules.length > 0 && (
+                    <span className="shrink-0 rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700">
+                      {classificationRules.length}
+                    </span>
+                  )}
+                  {item.key !== 'regras' && (
+                    <span className="shrink-0 rounded-full bg-[var(--color-neutral-100)] px-2.5 py-1 text-[11px] font-medium text-neutral-500">
+                      Fase 2
+                    </span>
+                  )}
                   <ChevronRight size={16} className="shrink-0 text-neutral-300" />
                 </button>
               </li>
@@ -66,6 +80,15 @@ export default function Settings() {
           </ul>
         </Card>
       ))}
+
+      <ClassificationRulesModal
+        open={rulesOpen}
+        onClose={() => setRulesOpen(false)}
+        rules={classificationRules}
+        costCenters={costCenters}
+        onUpdate={updateClassificationRule}
+        onDelete={deleteClassificationRule}
+      />
     </div>
   )
 }

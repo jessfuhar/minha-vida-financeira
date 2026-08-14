@@ -1,4 +1,4 @@
-import { Pencil, Trash2 } from 'lucide-react'
+import { Pencil, Trash2, ArrowLeftRight } from 'lucide-react'
 import type { Transaction, CostCenter } from '../../db/models'
 import { formatCurrencySigned, formatDate } from '../../lib/format'
 import { TransactionTypeBadge } from './TransactionTypeBadge'
@@ -11,6 +11,12 @@ interface TransactionsTableProps {
   emptyMessage?: string
   onEdit?: (t: Transaction) => void
   onDelete?: (t: Transaction) => void
+  /** Ativa a coluna de checkboxes + "selecionar todos" (respeitando sempre a lista já filtrada
+   * recebida em `transactions`). */
+  selectable?: boolean
+  selectedIds?: Set<string>
+  onToggleOne?: (id: string) => void
+  onToggleAll?: (ids: string[], checked: boolean) => void
 }
 
 export function resolveCostCenterName(costCenters: CostCenter[], costCenterId: string | null): string {
@@ -30,18 +36,34 @@ export function TransactionsTable({
   emptyMessage = 'Nenhum lançamento encontrado.',
   onEdit,
   onDelete,
+  selectable = false,
+  selectedIds,
+  onToggleOne,
+  onToggleAll,
 }: TransactionsTableProps) {
   if (transactions.length === 0) {
     return <p className="py-10 text-center text-[14px] text-neutral-500">{emptyMessage}</p>
   }
 
   const showActions = Boolean(onEdit || onDelete)
+  const allIds = transactions.map((t) => t.id)
+  const allSelected = selectable && allIds.length > 0 && allIds.every((id) => selectedIds?.has(id))
 
   return (
     <div className="-mx-5 overflow-x-auto px-5 lg:-mx-6 lg:px-6">
       <table className="w-full min-w-[860px] border-collapse text-left">
         <thead>
           <tr className="text-[12px] uppercase tracking-wide text-neutral-400">
+            {selectable && (
+              <th className="w-8 pb-3 pr-2 font-medium">
+                <input
+                  type="checkbox"
+                  aria-label="Selecionar todos"
+                  checked={allSelected}
+                  onChange={(e) => onToggleAll?.(allIds, e.target.checked)}
+                />
+              </th>
+            )}
             <th className="pb-3 pr-4 font-medium">Data</th>
             <th className="pb-3 pr-4 font-medium">Descrição</th>
             <th className="pb-3 pr-4 font-medium">Tipo</th>
@@ -55,19 +77,37 @@ export function TransactionsTable({
         <tbody>
           {transactions.map((t) => (
             <tr key={t.id} className="border-t border-[var(--border-hairline)] text-[13.5px]">
+              {selectable && (
+                <td className="py-3 pr-2">
+                  <input
+                    type="checkbox"
+                    aria-label={`Selecionar ${t.description}`}
+                    checked={Boolean(selectedIds?.has(t.id))}
+                    onChange={() => onToggleOne?.(t.id)}
+                  />
+                </td>
+              )}
               <td className="whitespace-nowrap py-3 pr-4 text-neutral-500 tabular-nums">{formatDate(t.date)}</td>
               <td className="max-w-[220px] py-3 pr-4">
-                <p className="truncate font-medium text-neutral-800">
+                <p className="truncate font-medium text-neutral-800" title={t.originalDescription || undefined}>
                   {t.description}
                   {t.source === 'importado' && (
                     <span className="ml-1.5 rounded-full bg-[var(--color-neutral-100)] px-1.5 py-0.5 align-middle text-[10px] font-medium text-neutral-500">
                       Importado
                     </span>
                   )}
+                  {t.transferId && (
+                    <span
+                      className="ml-1.5 inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 align-middle text-[10px] font-medium"
+                      style={{ color: 'var(--color-neutral-600)', background: 'var(--color-neutral-100)' }}
+                    >
+                      <ArrowLeftRight size={9} /> Transferência
+                    </span>
+                  )}
                 </p>
-                {(t.originalDescription || t.kind) && (
+                {(t.counterparty || t.originalDescription || t.kind) && (
                   <p className="truncate text-[11.5px] text-neutral-400">
-                    {[t.originalDescription, transactionKindMeta[t.kind]?.label].filter(Boolean).join(' · ')}
+                    {[t.counterparty || t.originalDescription, transactionKindMeta[t.kind]?.label].filter(Boolean).join(' · ')}
                   </p>
                 )}
               </td>

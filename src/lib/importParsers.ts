@@ -9,6 +9,7 @@
 import * as XLSX from 'xlsx'
 import { parseCurrencyInput } from './format'
 import { guessMapping, isMappingConfident, type MappableField } from './importMapping'
+import { deriveImportedDescription } from './importCounterparty'
 
 export type ImportFileKind = 'ofx' | 'ofc' | 'csv' | 'xls' | 'xlsx' | 'txt'
 
@@ -16,14 +17,20 @@ export interface ParsedStatementRow {
   index: number
   /** ISO yyyy-mm-dd quando reconhecida; null se não foi possível interpretar. */
   date: string | null
-  /** Texto exatamente como veio do arquivo — vira a "descrição original" do lançamento. */
+  /** Texto exatamente como veio do arquivo — vira a "descrição original" (histórico) do lançamento. Nunca é alterado. */
   description: string
+  /** Descrição amigável curta sugerida (ex.: "Pix - Enviado"), separada da contraparte — vira a "Descrição" editável. */
+  friendlyDescription: string
+  /** Nome da pessoa/empresa/estabelecimento relacionado, quando identificável. */
+  counterparty?: string
   /** Valor absoluto (sempre positivo); null se não reconhecido. */
   amount: number | null
   direction: 'entrada' | 'saida' | null
   document?: string
   /** Saldo informado na própria linha (quando existir) — apenas para exibição. */
   balance?: number
+  /** Nome do arquivo de origem — preenchido pelo assistente de importação ao processar vários arquivos. */
+  sourceFile?: string
   rawFields: Record<string, string>
 }
 
@@ -122,25 +129,47 @@ export function parseOfx(text: string, kind: 'ofx' | 'ofc' = 'ofx'): ParsedState
     const fitid = extractTag(block, 'FITID')
     const name = extractTag(block, 'NAME')
     const memo = extractTag(block, 'MEMO')
+    const payee = extractTag(block, 'PAYEE')
     const checknum = extractTag(block, 'CHECKNUM')
+    const refnum = extractTag(block, 'REFNUM')
 
     const amountNum = trnamt ? Number(trnamt.replace(',', '.')) : NaN
+    // Histórico original: preserva tudo que o extrato trouxe (NAME + MEMO), sem perder nada.
     const description = [name, memo].filter(Boolean).join(' - ') || trnType || 'Movimentação'
+    const fallbackLabel = name || trnType || 'Movimentação'
+
+    // Contraparte: prioriza PAYEE (quando o banco preenche esse campo estruturado); senão tenta
+    // extrair do MEMO (onde costuma vir o nome de quem enviou/recebeu); senão tenta do NAME.
+    let friendlyDescription = fallbackLabel
+    let counterparty = payee || undefined
+    if (!counterparty) {
+      const fromMemo = deriveImportedDescription(memo || '', fallbackLabel)
+      counterparty = fromMemo.counterparty
+    }
+    if (!counterparty) {
+      const fromName = deriveImportedDescription(name || '', fallbackLabel)
+      counterparty = fromName.counterparty
+    }
+    if (name) friendlyDescription = name
 
     rows.push({
       index: i,
       date: parseOfxDate(dtposted),
       description,
+      friendlyDescription,
+      counterparty,
       amount: Number.isNaN(amountNum) ? null : Math.abs(amountNum),
       direction: Number.isNaN(amountNum) ? null : amountNum >= 0 ? 'entrada' : 'saida',
-      document: fitid || checknum || undefined,
+      document: fitid || checknum || refnum || undefined,
       rawFields: {
         TRNTYPE: trnType ?? '',
         DTPOSTED: dtposted ?? '',
         TRNAMT: trnamt ?? '',
         NAME: name ?? '',
         MEMO: memo ?? '',
+        PAYEE: payee ?? '',
         FITID: fitid ?? '',
+        REFNUM: refnum ?? '',
       },
     })
   })
@@ -316,11 +345,15 @@ export function buildRowsFromMapping(
     }
 
     const balanceParsed = balanceRaw ? parseAmountCell(balanceRaw) : NaN
+    const description = descRaw || 'Movimentação'
+    const { friendly, counterparty } = deriveImportedDescription(description, 'Movimentação')
 
     return {
       index: i,
       date,
-      description: descRaw || 'Movimentação',
+      description,
+      friendlyDescription: friendly,
+      counterparty,
       amount,
       direction,
       document: documentRaw || undefined,

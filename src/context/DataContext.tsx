@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react'
 import type {
   Account,
   Transaction,
@@ -10,6 +10,7 @@ import type {
   SpendingLimits,
   PlannedItem,
   Profile,
+  ClassificationRule,
 } from '../db/models'
 import {
   getAll,
@@ -23,6 +24,9 @@ import {
   saveSpendingLimits,
 } from '../db/storage'
 import { accountBalanceNow, totalBalanceNow, monthTotals, monthKey, todayIso, daysUntil } from '../lib/aggregations'
+import { isInternalTransferKind } from '../lib/transactionKind'
+import { normalizeCounterpartyKey } from '../lib/importCounterparty'
+import { validateTransferPair } from '../lib/transferDetection'
 import { brand } from '../config/brand'
 import type { AttentionAlert } from '../data/types'
 
@@ -33,6 +37,16 @@ type NewBill = Omit<Bill, 'id' | 'createdAt' | 'updatedAt' | 'status'> & { statu
 type NewGoal = Omit<Goal, 'id' | 'createdAt' | 'updatedAt' | 'saved'>
 type NewGoalContribution = Omit<GoalContribution, 'id' | 'createdAt' | 'updatedAt'>
 type NewPlannedItem = Omit<PlannedItem, 'id' | 'createdAt' | 'updatedAt'>
+
+function computeTransactionStatus(input: {
+  kind: Transaction['kind']
+  costCenterId: string | null
+  categoryId: string | null
+}): Transaction['status'] {
+  // Transferências entre contas próprias não precisam de categoria — nunca ficam "aguardando classificação".
+  if (isInternalTransferKind(input.kind)) return 'classificado'
+  return input.costCenterId && input.categoryId ? 'classificado' : 'aguardando_classificacao'
+}
 
 interface DataContextValue {
   loading: boolean
@@ -47,6 +61,7 @@ interface DataContextValue {
   plannedItems: PlannedItem[]
   spendingLimits: SpendingLimits
   profile: Profile
+  classificationRules: ClassificationRule[]
 
   addAccount: (input: NewAccount) => Promise<Account>
   updateAccount: (id: string, patch: Partial<NewAccount>) => Promise<void>
@@ -56,6 +71,27 @@ interface DataContextValue {
   addTransactionsBatch: (inputs: NewTransaction[]) => Promise<Transaction[]>
   updateTransaction: (id: string, patch: Partial<NewTransaction>) => Promise<void>
   deleteTransaction: (id: string) => Promise<void>
+  bulkUpdateTransactions: (ids: string[], patch: Partial<NewTransaction>) => Promise<void>
+  bulkDeleteTransactions: (ids: string[]) => Promise<void>
+
+  // ---------- Transferências entre contas próprias ----------
+  createTransfer: (input: {
+    fromAccountId: string
+    toAccountId: string
+    amount: number
+    date: string
+    note?: string
+  }) => Promise<{ txOut: Transaction; txIn: Transaction }>
+  updateTransferAmount: (transferId: string, newAmount: number) => Promise<void>
+  deleteTransferBoth: (transferId: string) => Promise<void>
+  unlinkTransfer: (transferId: string) => Promise<void>
+  linkAsTransfer: (idA: string, idB: string) => Promise<{ ok: boolean; reason?: string }>
+
+  // ---------- Regras de classificação aprendidas ----------
+  saveClassificationRule: (input: { counterparty: string; categoryId: string | null; costCenterId: string | null }) => Promise<void>
+  updateClassificationRule: (id: string, patch: Partial<Pick<ClassificationRule, 'categoryId' | 'costCenterId' | 'active' | 'label'>>) => Promise<void>
+  deleteClassificationRule: (id: string) => Promise<void>
+  registerRuleUsage: (id: string) => void
 
   addCostCenter: (input: NewCostCenter) => Promise<CostCenter>
   updateCostCenter: (id: string, patch: Partial<Pick<CostCenter, 'name' | 'emoji' | 'color'>>) => Promise<void>
@@ -67,6 +103,8 @@ interface DataContextValue {
   addBill: (input: NewBill) => Promise<Bill>
   updateBill: (id: string, patch: Partial<NewBill>) => Promise<void>
   deleteBill: (id: string) => Promise<void>
+  bulkUpdateBills: (ids: string[], patch: Partial<NewBill>) => Promise<void>
+  bulkDeleteBills: (ids: string[]) => Promise<void>
   markBillPaid: (id: string, opts: { createTransaction: boolean; accountId?: string; date?: string }) => Promise<void>
 
   addGoal: (input: NewGoal) => Promise<Goal>
@@ -103,7 +141,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [persistent, setPersistent] = useState(true)
   const [accounts, setAccounts] = useState<Account[]>([])
-  const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [transactions, setTransactionsState] = useState<Transaction[]>([])
+  // Espelha `transactions` de forma síncrona (sem esperar o próximo render). Necessário porque
+  // algumas operações encadeadas na mesma função (ex.: importar e, em seguida, vincular como
+  // transferência as linhas recém-criadas) leem o estado mais atual antes que o React tenha
+  // processado o re-render — sem isso, a busca por id do registro recém-criado falhava
+  // silenciosamente por depender de um `transactions` ainda desatualizado (closure stale).
+  const transactionsRef = useRef<Transaction[]>([])
+  const setTransactions = (updater: Transaction[] | ((prev: Transaction[]) => Transaction[])) => {
+    setTransactionsState((prev) => {
+      const next = typeof updater === 'function' ? (updater as (prev: Transaction[]) => Transaction[])(prev) : updater
+      transactionsRef.current = next
+      return next
+    })
+  }
   const [costCenters, setCostCenters] = useState<CostCenter[]>([])
   const [bills, setBills] = useState<Bill[]>([])
   const [goals, setGoals] = useState<Goal[]>([])
@@ -111,11 +162,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [plannedItems, setPlannedItems] = useState<PlannedItem[]>([])
   const [spendingLimits, setSpendingLimits] = useState<SpendingLimits>(() => loadSpendingLimits<SpendingLimits>({}))
   const [profile, setProfile] = useState<Profile>(() => loadProfile<Profile>({ name: brand.userName }))
+  const [classificationRules, setClassificationRules] = useState<ClassificationRule[]>([])
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const [acc, tx, cc, bl, gl, gc, pi] = await Promise.all([
+      const [acc, tx, cc, bl, gl, gc, pi, cr] = await Promise.all([
         getAll<Account>('accounts'),
         getAll<Transaction>('transactions'),
         getAll<CostCenter>('costCenters'),
@@ -123,6 +175,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         getAll<Goal>('goals'),
         getAll<GoalContribution>('goalContributions'),
         getAll<PlannedItem>('plannedItems'),
+        getAll<ClassificationRule>('classificationRules'),
       ])
       if (cancelled) return
 
@@ -166,6 +219,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setGoals(migratedGoals)
       setGoalContributions(migratedContributions)
       setPlannedItems(pi)
+      setClassificationRules(cr)
       setPersistent(isPersistent())
       setLoading(false)
     })()
@@ -219,7 +273,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const transaction: Transaction = {
       ...input,
       source: input.source ?? 'manual',
-      status: input.status ?? (input.costCenterId && input.categoryId ? 'classificado' : 'aguardando_classificacao'),
+      status: input.status ?? computeTransactionStatus(input),
       id: generateId(),
       createdAt: now(),
       updatedAt: now(),
@@ -235,7 +289,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const created: Transaction[] = inputs.map((input) => ({
       ...input,
       source: input.source ?? 'importado',
-      status: input.status ?? (input.costCenterId && input.categoryId ? 'classificado' : 'aguardando_classificacao'),
+      status: input.status ?? computeTransactionStatus(input),
       id: generateId(),
       createdAt: now(),
       updatedAt: now(),
@@ -252,7 +306,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       const merged = { ...existing, ...patch }
       const updated: Transaction = {
         ...merged,
-        status: merged.costCenterId && merged.categoryId ? 'classificado' : 'aguardando_classificacao',
+        status: computeTransactionStatus(merged),
         updatedAt: now(),
       }
       await putItem('transactions', updated)
@@ -261,10 +315,248 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [transactions],
   )
 
-  const deleteTransaction = useCallback(async (id: string) => {
-    await deleteItem('transactions', id)
-    setTransactions((prev) => prev.filter((t) => t.id !== id))
-  }, [])
+  /** Restaura o `kind` original (e desfaz o vínculo) de uma ponta de transferência que ficou
+   * "órfã" — usado quando a outra ponta é excluída, para nunca deixar um `transferId` pendurado. */
+  const restoreOrphanedTransferPartner = (t: Transaction): Transaction => ({
+    ...t,
+    kind: t.preTransferKind ?? 'outros',
+    transferId: undefined,
+    preTransferKind: undefined,
+    status: computeTransactionStatus({ kind: t.preTransferKind ?? 'outros', costCenterId: t.costCenterId, categoryId: t.categoryId }),
+    updatedAt: now(),
+  })
+
+  const deleteTransaction = useCallback(
+    async (id: string) => {
+      const existing = transactions.find((t) => t.id === id)
+      await deleteItem('transactions', id)
+      let restoredPartner: Transaction | null = null
+      if (existing?.transferId) {
+        const partner = transactions.find((t) => t.transferId === existing.transferId && t.id !== id)
+        if (partner) {
+          restoredPartner = restoreOrphanedTransferPartner(partner)
+          await putItem('transactions', restoredPartner)
+        }
+      }
+      setTransactions((prev) =>
+        prev.filter((t) => t.id !== id).map((t) => (restoredPartner && t.id === restoredPartner.id ? restoredPartner : t)),
+      )
+    },
+    [transactions],
+  )
+
+  /** Atualização em massa — uma única passada de gravação + atualização de estado, em vez de uma
+   * chamada por lançamento (importante ao classificar/mover centenas de lançamentos de uma vez). */
+  const bulkUpdateTransactions = useCallback(
+    async (ids: string[], patch: Partial<NewTransaction>) => {
+      const idSet = new Set(ids)
+      const updated: Transaction[] = []
+      for (const t of transactions) {
+        if (!idSet.has(t.id)) continue
+        const merged = { ...t, ...patch }
+        updated.push({ ...merged, status: computeTransactionStatus(merged), updatedAt: now() })
+      }
+      await Promise.all(updated.map((u) => putItem('transactions', u)))
+      const byId = new Map(updated.map((u) => [u.id, u]))
+      setTransactions((prev) => prev.map((t) => byId.get(t.id) ?? t))
+    },
+    [transactions],
+  )
+
+  /** Exclusão em massa — também restaura (desvincula) automaticamente qualquer ponta de
+   * transferência cujo par foi excluído nesta mesma operação, para nunca deixar vínculo quebrado. */
+  const bulkDeleteTransactions = useCallback(
+    async (ids: string[]) => {
+      const idSet = new Set(ids)
+      const toDelete = transactions.filter((t) => idSet.has(t.id))
+      const affectedTransferIds = new Set(toDelete.filter((t) => t.transferId).map((t) => t.transferId as string))
+      const orphanedPartners = transactions.filter(
+        (t) => t.transferId && affectedTransferIds.has(t.transferId) && !idSet.has(t.id),
+      )
+      const restoredPartners = orphanedPartners.map(restoreOrphanedTransferPartner)
+      await Promise.all([
+        ...ids.map((id) => deleteItem('transactions', id)),
+        ...restoredPartners.map((t) => putItem('transactions', t)),
+      ])
+      const restoredById = new Map(restoredPartners.map((t) => [t.id, t]))
+      setTransactions((prev) => prev.filter((t) => !idSet.has(t.id)).map((t) => restoredById.get(t.id) ?? t))
+    },
+    [transactions],
+  )
+
+  // ---------- Transferências entre contas próprias ----------
+  const createTransfer = useCallback(
+    async (input: { fromAccountId: string; toAccountId: string; amount: number; date: string; note?: string }) => {
+      const transferId = generateId()
+      const fromAcc = accounts.find((a) => a.id === input.fromAccountId)
+      const toAcc = accounts.find((a) => a.id === input.toAccountId)
+      const fromLabel = fromAcc ? fromAcc.nickname || fromAcc.bank : 'conta de origem'
+      const toLabel = toAcc ? toAcc.nickname || toAcc.bank : 'conta de destino'
+      const txOut = await addTransaction({
+        date: input.date,
+        description: `Transferência para ${toLabel}`,
+        kind: 'transferencia_interna',
+        direction: 'saida',
+        amount: input.amount,
+        accountId: input.fromAccountId,
+        costCenterId: null,
+        categoryId: null,
+        note: input.note,
+        status: 'classificado',
+        transferId,
+      })
+      const txIn = await addTransaction({
+        date: input.date,
+        description: `Transferência de ${fromLabel}`,
+        kind: 'transferencia_interna',
+        direction: 'entrada',
+        amount: input.amount,
+        accountId: input.toAccountId,
+        costCenterId: null,
+        categoryId: null,
+        note: input.note,
+        status: 'classificado',
+        transferId,
+      })
+      return { txOut, txIn }
+    },
+    [accounts, addTransaction],
+  )
+
+  const updateTransferAmount = useCallback(
+    async (transferId: string, newAmount: number) => {
+      const pair = transactions.filter((t) => t.transferId === transferId)
+      const updated = pair.map((t) => ({ ...t, amount: newAmount, updatedAt: now() }))
+      await Promise.all(updated.map((u) => putItem('transactions', u)))
+      const byId = new Map(updated.map((u) => [u.id, u]))
+      setTransactions((prev) => prev.map((t) => byId.get(t.id) ?? t))
+    },
+    [transactions],
+  )
+
+  const deleteTransferBoth = useCallback(
+    async (transferId: string) => {
+      const ids = transactions.filter((t) => t.transferId === transferId).map((t) => t.id)
+      await bulkDeleteTransactions(ids)
+    },
+    [transactions, bulkDeleteTransactions],
+  )
+
+  const unlinkTransfer = useCallback(
+    async (transferId: string) => {
+      const pair = transactions.filter((t) => t.transferId === transferId)
+      const updated = pair.map(restoreOrphanedTransferPartner)
+      await Promise.all(updated.map((u) => putItem('transactions', u)))
+      const byId = new Map(updated.map((u) => [u.id, u]))
+      setTransactions((prev) => prev.map((t) => byId.get(t.id) ?? t))
+    },
+    [transactions],
+  )
+
+  const linkAsTransfer = useCallback(
+    async (idA: string, idB: string) => {
+      // Lê do ref (sempre atualizado de forma síncrona) em vez do `transactions` fechado nesta
+      // closure — importante quando esta função é chamada logo após uma importação, na mesma
+      // operação, antes de o React repropagar o novo `transactions` para um re-render.
+      const a = transactionsRef.current.find((t) => t.id === idA)
+      const b = transactionsRef.current.find((t) => t.id === idB)
+      if (!a || !b) return { ok: false, reason: 'Lançamento não encontrado.' }
+      const validation = validateTransferPair(a, b)
+      if (!validation.valid) return { ok: false, reason: validation.reason }
+      const transferId = generateId()
+      const updatedA: Transaction = {
+        ...a,
+        transferId,
+        preTransferKind: a.kind,
+        kind: 'transferencia_interna',
+        costCenterId: null,
+        categoryId: null,
+        status: 'classificado',
+        updatedAt: now(),
+      }
+      const updatedB: Transaction = {
+        ...b,
+        transferId,
+        preTransferKind: b.kind,
+        kind: 'transferencia_interna',
+        costCenterId: null,
+        categoryId: null,
+        status: 'classificado',
+        updatedAt: now(),
+      }
+      await Promise.all([putItem('transactions', updatedA), putItem('transactions', updatedB)])
+      setTransactions((prev) => prev.map((t) => (t.id === idA ? updatedA : t.id === idB ? updatedB : t)))
+      return { ok: true }
+    },
+    [transactions],
+  )
+
+  // ---------- Regras de classificação aprendidas ----------
+  const saveClassificationRule = useCallback(
+    async (input: { counterparty: string; categoryId: string | null; costCenterId: string | null }) => {
+      const pattern = normalizeCounterpartyKey(input.counterparty)
+      if (!pattern) return
+      const existing = classificationRules.find((r) => r.pattern === pattern)
+      if (existing) {
+        const updated: ClassificationRule = {
+          ...existing,
+          categoryId: input.categoryId,
+          costCenterId: input.costCenterId,
+          active: true,
+          updatedAt: now(),
+        }
+        await putItem('classificationRules', updated)
+        setClassificationRules((prev) => prev.map((r) => (r.id === existing.id ? updated : r)))
+      } else {
+        const rule: ClassificationRule = {
+          id: generateId(),
+          pattern,
+          label: input.counterparty.trim(),
+          categoryId: input.categoryId,
+          costCenterId: input.costCenterId,
+          active: true,
+          createdAt: now(),
+          updatedAt: now(),
+          useCount: 0,
+        }
+        await putItem('classificationRules', rule)
+        setClassificationRules((prev) => [...prev, rule])
+      }
+    },
+    [classificationRules],
+  )
+
+  const updateClassificationRule = useCallback(
+    async (id: string, patch: Partial<Pick<ClassificationRule, 'categoryId' | 'costCenterId' | 'active' | 'label'>>) => {
+      const existing = classificationRules.find((r) => r.id === id)
+      if (!existing) return
+      const updated: ClassificationRule = { ...existing, ...patch, updatedAt: now() }
+      await putItem('classificationRules', updated)
+      setClassificationRules((prev) => prev.map((r) => (r.id === id ? updated : r)))
+    },
+    [classificationRules],
+  )
+
+  const deleteClassificationRule = useCallback(
+    async (id: string) => {
+      await deleteItem('classificationRules', id)
+      setClassificationRules((prev) => prev.filter((r) => r.id !== id))
+    },
+    [classificationRules],
+  )
+
+  /** Marca que uma regra acabou de ser aplicada (usada na importação) — atualiza contagem de uso
+   * e data da última utilização, sem bloquear a importação em si (fire-and-forget). */
+  const registerRuleUsage = useCallback(
+    (id: string) => {
+      const existing = classificationRules.find((r) => r.id === id)
+      if (!existing) return
+      const updated: ClassificationRule = { ...existing, useCount: existing.useCount + 1, lastUsedAt: now() }
+      setClassificationRules((prev) => prev.map((r) => (r.id === id ? updated : r)))
+      void putItem('classificationRules', updated)
+    },
+    [classificationRules],
+  )
 
   // ---------- Cost centers & categories ----------
   const addCostCenter = useCallback(async (input: NewCostCenter) => {
@@ -378,6 +670,27 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const deleteBill = useCallback(async (id: string) => {
     await deleteItem('bills', id)
     setBills((prev) => prev.filter((b) => b.id !== id))
+  }, [])
+
+  const bulkUpdateBills = useCallback(
+    async (ids: string[], patch: Partial<NewBill>) => {
+      const idSet = new Set(ids)
+      const updated: Bill[] = []
+      for (const b of bills) {
+        if (!idSet.has(b.id)) continue
+        updated.push({ ...b, ...patch, updatedAt: now() })
+      }
+      await Promise.all(updated.map((u) => putItem('bills', u)))
+      const byId = new Map(updated.map((u) => [u.id, u]))
+      setBills((prev) => prev.map((b) => byId.get(b.id) ?? b))
+    },
+    [bills],
+  )
+
+  const bulkDeleteBills = useCallback(async (ids: string[]) => {
+    const idSet = new Set(ids)
+    await Promise.all(ids.map((id) => deleteItem('bills', id)))
+    setBills((prev) => prev.filter((b) => !idSet.has(b.id)))
   }, [])
 
   const markBillPaid = useCallback(
@@ -569,7 +882,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       })
     }
 
-    const uncategorized = transactions.filter((t) => !t.costCenterId || !t.categoryId)
+    const uncategorized = transactions.filter((t) => (!t.costCenterId || !t.categoryId) && !isInternalTransferKind(t.kind))
     if (uncategorized.length > 0) {
       list.push({
         id: 'uncategorized-tx',
@@ -605,6 +918,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     plannedItems,
     spendingLimits,
     profile,
+    classificationRules,
     addAccount,
     updateAccount,
     deleteAccount,
@@ -612,6 +926,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
     addTransactionsBatch,
     updateTransaction,
     deleteTransaction,
+    bulkUpdateTransactions,
+    bulkDeleteTransactions,
+    createTransfer,
+    updateTransferAmount,
+    deleteTransferBoth,
+    unlinkTransfer,
+    linkAsTransfer,
+    saveClassificationRule,
+    updateClassificationRule,
+    deleteClassificationRule,
+    registerRuleUsage,
     addCostCenter,
     updateCostCenter,
     deleteCostCenter,
@@ -621,6 +946,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     addBill,
     updateBill,
     deleteBill,
+    bulkUpdateBills,
+    bulkDeleteBills,
     markBillPaid,
     addGoal,
     updateGoal,

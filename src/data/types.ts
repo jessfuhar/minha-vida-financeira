@@ -13,6 +13,7 @@ export type TransactionKind =
   | 'pix_recebido'
   | 'transferencia_enviada'
   | 'transferencia_recebida'
+  | 'transferencia_interna'
   | 'boleto'
   | 'cartao_credito'
   | 'debito'

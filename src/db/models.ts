@@ -54,12 +54,43 @@ export interface Transaction {
   note?: string
   /** Documento/identificador do lançamento (nº do documento, FITID do extrato, etc.), quando existir. */
   document?: string
+  /** Nome da pessoa, empresa, estabelecimento ou instituição relacionada (contraparte) — extraído do
+   * extrato quando possível, sempre editável. Nunca sobrescreve a descrição nem o histórico original. */
+  counterparty?: string
+  /** Arquivo de origem da importação (ex.: "jan-2026.ofx"), para referência interna — não precisa aparecer sempre na UI. */
+  sourceFile?: string
   /** Origem do lançamento — puramente informativo, nunca bloqueia edição. Ausente = lançamento antigo (tratado como manual). */
   source?: 'manual' | 'importado'
   /** Preenchido quando o lançamento foi gerado automaticamente ao pagar uma conta. */
   billId?: string
+  /** Preenchido nas duas pontas de uma transferência entre contas próprias — mesmo valor nas duas,
+   * usado para localizar o par (`transactions.filter(t => t.transferId === x)`) sem precisar de uma 3ª entidade. */
+  transferId?: string
+  /** Guarda o `kind` anterior a virar uma transferência vinculada, para poder restaurar ao desvincular. */
+  preTransferKind?: TransactionKind
   createdAt: string
   updatedAt: string
+}
+
+/**
+ * Regra de classificação aprendida a partir das escolhas da usuária: quando uma contraparte
+ * (normalizada) já foi classificada antes, a próxima importação sugere a mesma categoria/centro de
+ * custo. Nunca criada automaticamente para tipos genéricos (ex.: "Pix enviado") — sempre amarrada a
+ * um padrão de contraparte específico.
+ */
+export interface ClassificationRule {
+  id: string
+  /** Contraparte normalizada (maiúsculas, sem acento/pontuação/espaços duplicados) — chave de correspondência. */
+  pattern: string
+  /** Texto da contraparte como visto da primeira vez, só para exibição legível na tela de regras. */
+  label: string
+  categoryId: string | null
+  costCenterId: string | null
+  active: boolean
+  createdAt: string
+  updatedAt: string
+  lastUsedAt?: string
+  useCount: number
 }
 
 export type BillStatus = 'pendente' | 'paga'

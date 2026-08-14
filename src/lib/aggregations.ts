@@ -1,5 +1,6 @@
 import type { Account, Transaction, Bill } from '../db/models'
 import type { BillStatus as DisplayBillStatus } from '../data/types'
+import { isInternalTransferKind } from './transactionKind'
 
 const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
@@ -90,14 +91,16 @@ export interface MonthTotals {
 }
 
 export function monthTotals(transactions: Transaction[], key: string): MonthTotals {
-  return transactions.filter((t) => monthKey(t.date) === key).reduce(
-    (acc, t) => {
-      if (t.direction === 'entrada') acc.entradas += t.amount
-      else acc.saidas += t.amount
-      return acc
-    },
-    { entradas: 0, saidas: 0 },
-  )
+  return transactions
+    .filter((t) => monthKey(t.date) === key && !isInternalTransferKind(t.kind))
+    .reduce(
+      (acc, t) => {
+        if (t.direction === 'entrada') acc.entradas += t.amount
+        else acc.saidas += t.amount
+        return acc
+      },
+      { entradas: 0, saidas: 0 },
+    )
 }
 
 export interface CashFlowSeriesPoint {
@@ -129,10 +132,11 @@ export function dailyCashFlowSeries(accounts: Account[], transactions: Transacti
   })
 }
 
-/** Total de saídas num intervalo de datas (inclusive). */
+/** Total de saídas num intervalo de datas (inclusive). Transferências entre contas próprias não
+ * entram aqui — não são despesa real, o dinheiro só mudou de conta. */
 export function saidasBetween(transactions: Transaction[], fromIso: string, toIso: string): number {
   return transactions
-    .filter((t) => t.direction === 'saida' && t.date >= fromIso && t.date <= toIso)
+    .filter((t) => t.direction === 'saida' && t.date >= fromIso && t.date <= toIso && !isInternalTransferKind(t.kind))
     .reduce((s, t) => s + t.amount, 0)
 }
 
@@ -141,11 +145,15 @@ export function saidasNoDia(transactions: Transaction[], dayIso: string): number
 }
 
 export function saidasNoMes(transactions: Transaction[], key: string): number {
-  return transactions.filter((t) => t.direction === 'saida' && monthKey(t.date) === key).reduce((s, t) => s + t.amount, 0)
+  return transactions
+    .filter((t) => t.direction === 'saida' && monthKey(t.date) === key && !isInternalTransferKind(t.kind))
+    .reduce((s, t) => s + t.amount, 0)
 }
 
 export function saidasNoAno(transactions: Transaction[], key: string): number {
-  return transactions.filter((t) => t.direction === 'saida' && yearKey(t.date) === key).reduce((s, t) => s + t.amount, 0)
+  return transactions
+    .filter((t) => t.direction === 'saida' && yearKey(t.date) === key && !isInternalTransferKind(t.kind))
+    .reduce((s, t) => s + t.amount, 0)
 }
 
 export function daysInMonth(year: number, monthIndex0: number): number {
@@ -189,7 +197,14 @@ export function categorySpendInMonth(
   key: string,
 ): CategorySpend {
   const items = transactions
-    .filter((t) => t.direction === 'saida' && monthKey(t.date) === key && t.costCenterId === costCenterId && t.categoryId === categoryId)
+    .filter(
+      (t) =>
+        t.direction === 'saida' &&
+        monthKey(t.date) === key &&
+        t.costCenterId === costCenterId &&
+        t.categoryId === categoryId &&
+        !isInternalTransferKind(t.kind),
+    )
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
   return { total: items.reduce((s, t) => s + t.amount, 0), count: items.length, items }
 }

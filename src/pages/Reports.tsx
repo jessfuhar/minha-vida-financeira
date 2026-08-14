@@ -8,13 +8,17 @@ import { BalanceEvolutionChart } from '../components/charts/BalanceEvolutionChar
 import { useData } from '../context/DataContext'
 import { monthlyCashFlowSeries, monthKey, todayIso } from '../lib/aggregations'
 import { formatCurrency } from '../lib/format'
+import { isInternalTransferKind } from '../lib/transactionKind'
 import { TrendingUp, TrendingDown, Scale, Wallet, PieChart } from 'lucide-react'
 
 export default function Reports() {
   const { accounts, transactions, costCenters, totalBalance, monthSummary } = useData()
 
   const currentMonth = monthKey(todayIso())
-  const monthTx = transactions.filter((t) => monthKey(t.date) === currentMonth && t.direction === 'saida')
+  // Transferências entre contas próprias nunca entram em relatórios de gasto — o dinheiro só mudou de conta.
+  const monthTx = transactions.filter(
+    (t) => monthKey(t.date) === currentMonth && t.direction === 'saida' && !isInternalTransferKind(t.kind),
+  )
 
   const spendByCostCenter = costCenters
     .map((cc) => ({ name: cc.name, value: monthTx.filter((t) => t.costCenterId === cc.id).reduce((s, t) => s + t.amount, 0) }))
