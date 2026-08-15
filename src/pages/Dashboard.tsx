@@ -15,7 +15,15 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { useToast } from '../components/ui/Toast'
 import { useConfirm } from '../components/ui/Confirm'
 import { useData } from '../context/DataContext'
-import { monthlyCashFlowSeries, spendingStatus, costCenterSpendInMonth, costCenterIncomeInMonth, monthKey, todayIso } from '../lib/aggregations'
+import {
+  monthlyCashFlowSeries,
+  spendingStatus,
+  costCenterSpendInMonth,
+  costCenterIncomeInMonth,
+  monthKey,
+  todayIso,
+  nextCostCenterColor,
+} from '../lib/aggregations'
 import { formatCurrency, parseCurrencyInput } from '../lib/format'
 import { brand, greeting } from '../config/brand'
 import type { Account, DashboardSectionKey, Transaction } from '../db/models'
@@ -39,6 +47,8 @@ export default function Dashboard() {
     spendingLimits,
     dashboardLayout,
     updateDashboardLayout,
+    addCostCenter,
+    addCategory,
   } = useData()
   const toast = useToast()
   const confirm = useConfirm()
@@ -117,6 +127,9 @@ export default function Dashboard() {
     setEditingTx(t)
     setTxModalOpen(true)
   }
+
+  const handleCreateCostCenter = (values: { name: string; emoji: string }) =>
+    addCostCenter({ ...values, color: nextCostCenterColor(costCenters.length) })
 
   const handleTxSubmit = async (values: TransactionFormValues) => {
     if (!editingTx) return
@@ -420,6 +433,8 @@ export default function Dashboard() {
         accounts={accounts}
         costCenters={costCenters}
         transaction={editingTx}
+        onCreateCostCenter={handleCreateCostCenter}
+        onCreateCategory={addCategory}
       />
     </div>
   )

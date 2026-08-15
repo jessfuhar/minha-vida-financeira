@@ -23,7 +23,7 @@ import { useToast } from '../components/ui/Toast'
 import { useConfirm } from '../components/ui/Confirm'
 import { useData } from '../context/DataContext'
 import { usePeriod } from '../context/PeriodContext'
-import { monthlyCashFlowSeries, dailyCashFlowSeries, monthKey, monthTotals, todayIso } from '../lib/aggregations'
+import { monthlyCashFlowSeries, dailyCashFlowSeries, monthKey, monthTotals, todayIso, nextCostCenterColor } from '../lib/aggregations'
 import { formatCurrency, parseCurrencyInput } from '../lib/format'
 import { useSelection } from '../lib/useSelection'
 import { buildHistorySuggestionIndex, suggestClassification, type ClassificationSuggestion } from '../lib/importRules'
@@ -61,6 +61,8 @@ export default function CashFlow() {
     linkAsTransfer,
     registerRuleUsage,
     updateAccount,
+    addCostCenter,
+    addCategory,
   } = useData()
   const { period: selectedPeriod, label: periodLabel, setPeriod } = usePeriod()
   const toast = useToast()
@@ -205,6 +207,11 @@ export default function CashFlow() {
     })
     setModalOpen(true)
   }
+
+  // Reaproveitado pelo formulário individual e pela classificação em massa — mesma função de
+  // criação já usada na tela de Centros de Custo, só que acionada a partir do próprio lançamento.
+  const handleCreateCostCenter = (values: { name: string; emoji: string }) =>
+    addCostCenter({ ...values, color: nextCostCenterColor(costCenters.length) })
 
   const handleSubmit = async (values: TransactionFormValues) => {
     const payload = {
@@ -564,6 +571,8 @@ export default function CashFlow() {
         count={selection.selectedCount}
         costCenters={costCenters}
         onConfirm={handleBulkClassify}
+        onCreateCostCenter={handleCreateCostCenter}
+        onCreateCategory={addCategory}
       />
 
       <BulkAccountModal
@@ -614,6 +623,8 @@ export default function CashFlow() {
         costCenters={costCenters}
         transaction={editing}
         initialValues={newTransactionPrefill ?? undefined}
+        onCreateCostCenter={handleCreateCostCenter}
+        onCreateCategory={addCategory}
       />
     </div>
   )

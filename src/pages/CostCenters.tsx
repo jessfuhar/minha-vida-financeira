@@ -117,6 +117,9 @@ export default function CostCenters() {
     setTxModalOpen(true)
   }
 
+  const handleCreateCostCenter = (values: { name: string; emoji: string }) =>
+    addCostCenter({ ...values, color: nextCostCenterColor(costCenters.length) })
+
   const handleTxSubmit = async (values: TransactionFormValues) => {
     if (!editingTx) return
     const payload = {
@@ -334,6 +337,8 @@ export default function CostCenters() {
         accounts={accounts}
         costCenters={costCenters}
         transaction={editingTx}
+        onCreateCostCenter={handleCreateCostCenter}
+        onCreateCategory={addCategory}
       />
     </div>
   )

@@ -2,12 +2,18 @@ import { useEffect, useState } from 'react'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { Field, TextInput, Textarea, Select, PillToggle } from '../ui/FormField'
+import { CostCenterFormModal, type CostCenterFormValues } from '../costcenters/CostCenterFormModal'
 import { kindsByDirection, transactionKindMeta } from '../../lib/transactionKind'
 import { accountTypeLabel } from '../accounts/AccountCard'
-import type { Account, CostCenter, Transaction } from '../../db/models'
+import type { Account, Category, CostCenter, Transaction } from '../../db/models'
 import type { TransactionDirection, TransactionKind } from '../../data/types'
 import { todayIso } from '../../lib/aggregations'
 import { isValidCurrencyInput, parseCurrencyInput, formatCurrency } from '../../lib/format'
+
+/** Valores sentinela usados só dentro dos <select> de Centro de Custo/Categoria para acionar a
+ * criação de um novo item — nunca chegam a ser gravados em `values` (o onChange intercepta antes). */
+const NEW_COST_CENTER_OPTION = '__new_cost_center__'
+const NEW_CATEGORY_OPTION = '__new_category__'
 
 export interface TransactionFormValues {
   direction: TransactionDirection
@@ -54,6 +60,10 @@ interface TransactionFormModalProps {
    * por exemplo, para pré-preencher o formulário a partir de uma possível movimentação de PDF que
    * não foi reconhecida automaticamente. Todos os campos continuam editáveis normalmente. */
   initialValues?: Partial<TransactionFormValues>
+  /** Cria o Centro de Custo/Categoria usando as mesmas funções já existentes em DataContext
+   * (`addCostCenter`/`addCategory`) — acionado pela opção "+ Criar novo..." ao final dos selects. */
+  onCreateCostCenter: (values: CostCenterFormValues) => Promise<CostCenter>
+  onCreateCategory: (costCenterId: string, name: string) => Promise<Category>
 }
 
 export function TransactionFormModal({
@@ -66,10 +76,15 @@ export function TransactionFormModal({
   costCenters,
   transaction,
   initialValues,
+  onCreateCostCenter,
+  onCreateCategory,
 }: TransactionFormModalProps) {
   const [values, setValues] = useState<TransactionFormValues>(() => emptyValues(accounts))
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [costCenterModalOpen, setCostCenterModalOpen] = useState(false)
+  const [addingCategory, setAddingCategory] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -92,6 +107,8 @@ export function TransactionFormModal({
       setValues({ ...emptyValues(accounts), ...initialValues })
     }
     setError('')
+    setAddingCategory(false)
+    setNewCategoryName('')
   }, [open, transaction, accounts, initialValues])
 
   const availableKinds = kindsByDirection[values.direction]
@@ -103,6 +120,41 @@ export function TransactionFormModal({
       direction,
       kind: kindsByDirection[direction].includes(v.kind) ? v.kind : kindsByDirection[direction][0],
     }))
+  }
+
+  const handleCostCenterChange = (value: string) => {
+    if (value === NEW_COST_CENTER_OPTION) {
+      setCostCenterModalOpen(true)
+      return
+    }
+    setValues((v) => ({ ...v, costCenterId: value, categoryId: '' }))
+    setAddingCategory(false)
+  }
+
+  const handleCreateCostCenter = async (formValues: CostCenterFormValues) => {
+    const created = await onCreateCostCenter(formValues)
+    setValues((v) => ({ ...v, costCenterId: created.id, categoryId: '' }))
+  }
+
+  const handleCategoryChange = (value: string) => {
+    if (value === NEW_CATEGORY_OPTION) {
+      setAddingCategory(true)
+      setNewCategoryName('')
+      return
+    }
+    setValues((v) => ({ ...v, categoryId: value }))
+  }
+
+  const confirmAddCategory = async () => {
+    const name = newCategoryName.trim()
+    if (!name || !values.costCenterId) {
+      setAddingCategory(false)
+      return
+    }
+    const created = await onCreateCategory(values.costCenterId, name)
+    setValues((v) => ({ ...v, categoryId: created.id }))
+    setNewCategoryName('')
+    setAddingCategory(false)
   }
 
   const handleSubmit = async () => {
@@ -124,8 +176,9 @@ export function TransactionFormModal({
   const noAccounts = accounts.length === 0
 
   return (
-    <Modal
-      open={open}
+    <>
+      <Modal
+        open={open}
       onClose={onClose}
       title={transaction ? 'Editar lançamento' : 'Novo lançamento'}
       width="lg"
@@ -256,31 +309,50 @@ export function TransactionFormModal({
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Centro de custo" hint="Opcional, mas recomendado">
-              <Select
-                value={values.costCenterId}
-                onChange={(e) => setValues((v) => ({ ...v, costCenterId: e.target.value, categoryId: '' }))}
-              >
+              <Select value={values.costCenterId} onChange={(e) => handleCostCenterChange(e.target.value)}>
                 <option value="">Sem centro de custo</option>
                 {costCenters.map((cc) => (
                   <option key={cc.id} value={cc.id}>
                     {cc.emoji} {cc.name}
                   </option>
                 ))}
+                <option value={NEW_COST_CENTER_OPTION}>+ Criar novo centro de custo</option>
               </Select>
             </Field>
             <Field label="Categoria" hint={selectedCostCenter ? undefined : 'Escolha um centro de custo primeiro'}>
-              <Select
-                value={values.categoryId}
-                onChange={(e) => setValues((v) => ({ ...v, categoryId: e.target.value }))}
-                disabled={!selectedCostCenter}
-              >
-                <option value="">Sem categoria</option>
-                {selectedCostCenter?.categories.map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.name}
-                  </option>
-                ))}
-              </Select>
+              {addingCategory ? (
+                <div className="flex items-center gap-2">
+                  <TextInput
+                    autoFocus
+                    value={newCategoryName}
+                    onChange={(e) => setNewCategoryName(e.target.value)}
+                    placeholder="Nome da categoria"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        void confirmAddCategory()
+                      }
+                      if (e.key === 'Escape') setAddingCategory(false)
+                    }}
+                  />
+                  <Button type="button" size="sm" onClick={confirmAddCategory} className="shrink-0">
+                    Criar
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setAddingCategory(false)} className="shrink-0">
+                    Cancelar
+                  </Button>
+                </div>
+              ) : (
+                <Select value={values.categoryId} onChange={(e) => handleCategoryChange(e.target.value)} disabled={!selectedCostCenter}>
+                  <option value="">Sem categoria</option>
+                  {selectedCostCenter?.categories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.name}
+                    </option>
+                  ))}
+                  {selectedCostCenter && <option value={NEW_CATEGORY_OPTION}>+ Criar nova categoria</option>}
+                </Select>
+              )}
             </Field>
           </div>
 
@@ -294,5 +366,7 @@ export function TransactionFormModal({
         </div>
       )}
     </Modal>
+    <CostCenterFormModal open={costCenterModalOpen} onClose={() => setCostCenterModalOpen(false)} onSubmit={handleCreateCostCenter} />
+    </>
   )
 }
