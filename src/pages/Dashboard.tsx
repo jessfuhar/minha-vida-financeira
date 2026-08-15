@@ -10,17 +10,20 @@ import { AccountFormModal, type AccountFormValues } from '../components/accounts
 import { AttentionList } from '../components/alerts/AttentionList'
 import { TransactionsTable } from '../components/transactions/TransactionsTable'
 import { TransactionFormModal, type TransactionFormValues } from '../components/transactions/TransactionFormModal'
-import { CashFlowChart } from '../components/charts/CashFlowChart'
+import { AnnualCashFlowChart } from '../components/charts/AnnualCashFlowChart'
 import { EmptyState } from '../components/ui/EmptyState'
+import { Select } from '../components/ui/FormField'
 import { useToast } from '../components/ui/Toast'
 import { useConfirm } from '../components/ui/Confirm'
 import { useData } from '../context/DataContext'
 import {
-  monthlyCashFlowSeries,
+  annualCashFlowSeries,
+  availableYears,
   spendingStatus,
   costCenterSpendInMonth,
   costCenterIncomeInMonth,
   monthKey,
+  monthLabelLong,
   todayIso,
   nextCostCenterColor,
 } from '../lib/aggregations'
@@ -64,6 +67,10 @@ export default function Dashboard() {
   // acessível por completo (clique) em qualquer lugar onde a tabela de lançamentos aparece.
   const [txModalOpen, setTxModalOpen] = useState(false)
   const [editingTx, setEditingTx] = useState<Transaction | null>(null)
+  // Gráfico rápido anual (Entradas x Saídas) — visão independente do período global de Fluxo de
+  // Caixa/Centros de Custo/Relatórios; só destaca um mês ao clicar, nunca navega para outra tela.
+  const [dashboardYear, setDashboardYear] = useState(() => new Date(todayIso()).getFullYear())
+  const [highlightedMonthKey, setHighlightedMonthKey] = useState<string | null>(null)
 
   const openNewAccount = () => {
     setEditingAccount(null)
@@ -163,7 +170,9 @@ export default function Dashboard() {
     toast.show('Lançamento excluído.', 'info')
   }
 
-  const cashFlowData = monthlyCashFlowSeries(accounts, transactions)
+  const annualData = annualCashFlowSeries(transactions, dashboardYear)
+  const dashboardYearOptions = availableYears(transactions)
+  const highlightedMonth = annualData.find((m) => m.key === highlightedMonthKey) ?? null
   const currentMonth = monthKey(todayIso())
   const favoriteCostCenters = dashboardLayout.favoriteCostCenterIds
     .map((id) => costCenters.find((cc) => cc.id === id))
@@ -259,13 +268,52 @@ export default function Dashboard() {
     ),
     cashflow: (
       <Card className="min-w-0">
-        <CardTitle hint={<Link to="/fluxo-de-caixa" className="text-[13px] font-medium text-rose-700 hover:underline">Ver tudo</Link>}>
-          Fluxo de caixa
+        <CardTitle
+          hint={
+            <div className="flex items-center gap-2.5">
+              <Select
+                value={dashboardYear}
+                onChange={(e) => {
+                  setDashboardYear(Number(e.target.value))
+                  setHighlightedMonthKey(null)
+                }}
+                className="!w-auto !py-1.5 !text-[12.5px]"
+              >
+                {dashboardYearOptions.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </Select>
+              <Link to="/fluxo-de-caixa" className="text-[13px] font-medium text-rose-700 hover:underline">
+                Ver tudo
+              </Link>
+            </div>
+          }
+        >
+          Entradas x Saídas · {dashboardYear}
         </CardTitle>
         {transactions.length === 0 ? (
           <EmptyState icon={TrendingUp} title="Nenhum lançamento ainda" description="Assim que você registrar entradas e saídas, o fluxo de caixa aparece aqui." />
         ) : (
-          <CashFlowChart data={cashFlowData} />
+          <>
+            <AnnualCashFlowChart
+              data={annualData}
+              selectedKey={highlightedMonthKey}
+              onSelectMonth={(key) => setHighlightedMonthKey((prev) => (prev === key ? null : key))}
+            />
+            {highlightedMonth && (
+              <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-1 rounded-xl bg-[var(--color-neutral-100)] px-4 py-3 text-[13px]">
+                <span className="font-medium text-neutral-800">{monthLabelLong(highlightedMonth.key)}</span>
+                <span className="text-neutral-600">
+                  Entradas: <strong className="font-semibold text-neutral-800">{formatCurrency(highlightedMonth.entradas)}</strong>
+                </span>
+                <span className="text-neutral-600">
+                  Saídas: <strong className="font-semibold text-neutral-800">{formatCurrency(highlightedMonth.saidas)}</strong>
+                </span>
+              </div>
+            )}
+          </>
         )}
       </Card>
     ),

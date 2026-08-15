@@ -10,6 +10,7 @@ import {
   Layers,
   BarChart3,
   Gauge,
+  TrendingUp,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -37,6 +38,7 @@ export const sidebarFooterItem: NavItem = {
 /** Módulos financeiros na barra superior. */
 export const topModules: NavItem[] = [
   { label: 'Fluxo de Caixa', path: '/fluxo-de-caixa', icon: ArrowLeftRight },
+  { label: 'Receitas', path: '/receitas', icon: TrendingUp },
   { label: 'Contas a Pagar', path: '/contas-a-pagar', icon: ReceiptText },
   { label: 'Cofrinho', path: '/cofrinho', icon: PiggyBank },
   { label: 'Centros de Custo', path: '/centros-de-custo', icon: Layers },

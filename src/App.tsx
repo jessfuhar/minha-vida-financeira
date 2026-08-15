@@ -6,6 +6,7 @@ import { ConfirmProvider } from './components/ui/Confirm'
 import { AppShell } from './components/layout/AppShell'
 import Dashboard from './pages/Dashboard'
 import CashFlow from './pages/CashFlow'
+import Receitas from './pages/Receitas'
 import BillsToPay from './pages/BillsToPay'
 import PiggyBank from './pages/PiggyBank'
 import CostCenters from './pages/CostCenters'
@@ -32,6 +33,7 @@ function App() {
                 <Route element={<AppShell />}>
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/fluxo-de-caixa" element={<CashFlow />} />
+                  <Route path="/receitas" element={<Receitas />} />
                   <Route path="/contas-a-pagar" element={<BillsToPay />} />
                   <Route path="/cofrinho" element={<PiggyBank />} />
                   <Route path="/centros-de-custo" element={<CostCenters />} />

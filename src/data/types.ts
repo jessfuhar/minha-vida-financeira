@@ -35,6 +35,9 @@ export interface AttentionAlert {
   level: AlertLevel
   title: string
   description?: string
+  /** Estado de navegação extra passado para `navigate(destination, { state })` — ex.: pré-ativar um
+   * filtro na tela de destino, para a usuária chegar direto onde resolve a pendência. */
+  state?: Record<string, unknown>
 }
 
 export type NotificationType = 'classificacao' | 'vencimento' | 'vencida' | 'saldo' | 'cofrinho'

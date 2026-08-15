@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { PageHeader } from '../components/layout/PageHeader'
-import { Card } from '../components/ui/Card'
+import { Card, CardTitle } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { EmptyState } from '../components/ui/EmptyState'
 import { SearchInput } from '../components/ui/SearchInput'
@@ -9,12 +9,13 @@ import { MonthYearSelector } from '../components/ui/MonthYearSelector'
 import { CostCenterFormModal, type CostCenterFormValues } from '../components/costcenters/CostCenterFormModal'
 import { CostCenterDetailModal } from '../components/costcenters/CostCenterDetailModal'
 import { TransactionFormModal, type TransactionFormValues } from '../components/transactions/TransactionFormModal'
+import { CostCenterDonutChart } from '../components/charts/CostCenterDonutChart'
 import { useToast } from '../components/ui/Toast'
 import { useConfirm } from '../components/ui/Confirm'
 import { useData } from '../context/DataContext'
 import { usePeriod } from '../context/PeriodContext'
 import { formatCurrency, parseCurrencyInput } from '../lib/format'
-import { costCenterSpendInMonth, costCenterIncomeInMonth, nextCostCenterColor } from '../lib/aggregations'
+import { costCenterSpendInMonth, costCenterIncomeInMonth, costCenterSpendShareInMonth, nextCostCenterColor } from '../lib/aggregations'
 import { matchesQuery, normalizeSearchText, transactionSearchFields } from '../lib/textSearch'
 import { Info, Plus, Pencil, Layers } from 'lucide-react'
 import type { CostCenter, Transaction } from '../db/models'
@@ -163,6 +164,10 @@ export default function CostCenters() {
     [costCenters, transactions, period],
   )
 
+  // Distribuição das SAÍDAS (nunca Entradas) entre Centros de Custo no mês selecionado — recalcula
+  // sempre que o mês/ano mudar, já que `period` entra nas deps.
+  const spendShare = useMemo(() => costCenterSpendShareInMonth(transactions, costCenters, period), [transactions, costCenters, period])
+
   const visibleCenterRows = useMemo(() => {
     const q = normalizeSearchText(search)
     if (!q) return centerRows
@@ -198,6 +203,17 @@ export default function CostCenters() {
           Clique num centro para ver suas categorias e lançamentos de {periodLabel}.
         </p>
       </Card>
+
+      {costCenters.length > 0 && (
+        <Card>
+          <CardTitle>Distribuição de gastos · {periodLabel}</CardTitle>
+          {spendShare.length === 0 ? (
+            <p className="py-6 text-center text-[13.5px] text-neutral-500">Sem saídas classificadas em {periodLabel}.</p>
+          ) : (
+            <CostCenterDonutChart data={spendShare} />
+          )}
+        </Card>
+      )}
 
       {costCenters.length === 0 ? (
         <Card>

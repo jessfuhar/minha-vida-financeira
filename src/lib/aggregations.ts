@@ -1,4 +1,4 @@
-import type { Account, Transaction, Bill } from '../db/models'
+import type { Account, Transaction, Bill, CostCenter } from '../db/models'
 import type { BillStatus as DisplayBillStatus } from '../data/types'
 import { isInternalTransferKind } from './transactionKind'
 
@@ -155,6 +155,51 @@ export function dailyCashFlowSeries(accounts: Account[], transactions: Transacti
   })
 }
 
+export interface DayOfMonthPoint {
+  /** Dia do mês (1-31), usado como rótulo no eixo X. */
+  label: string
+  entradas: number
+  saidas: number
+}
+
+/** Distribui Entradas/Saídas de UM mês específico (nunca o período selecionado na tela, a data de
+ * importação ou hoje — sempre `transaction.date`) pelos dias daquele mês, um ponto por dia (mesmo
+ * critério de `monthTotals`: exclui transferências entre contas próprias). Usado pelo gráfico do
+ * Fluxo de Caixa, que mostra somente o mês atualmente selecionado. */
+export function dailyCashFlowSeriesForMonth(transactions: Transaction[], key: string): DayOfMonthPoint[] {
+  const [year, month] = key.split('-').map(Number)
+  const totalDays = daysInMonth(year, month - 1)
+  const points: DayOfMonthPoint[] = []
+  for (let day = 1; day <= totalDays; day++) {
+    const dayIso = `${key}-${String(day).padStart(2, '0')}`
+    const dayTx = transactions.filter((t) => t.date === dayIso && !isInternalTransferKind(t.kind))
+    const entradas = dayTx.filter((t) => t.direction === 'entrada').reduce((s, t) => s + t.amount, 0)
+    const saidas = dayTx.filter((t) => t.direction === 'saida').reduce((s, t) => s + t.amount, 0)
+    points.push({ label: String(day), entradas, saidas })
+  }
+  return points
+}
+
+export interface AnnualCashFlowPoint {
+  /** Chave do mês (YYYY-MM), usada para identificar o ponto clicado. */
+  key: string
+  label: string
+  entradas: number
+  saidas: number
+}
+
+/** Série Janeiro→Dezembro de um ano específico (nunca "últimos N meses" a partir de hoje, ao
+ * contrário de `monthlyCashFlowSeries`) — usada no gráfico rápido anual do Início. */
+export function annualCashFlowSeries(transactions: Transaction[], year: number): AnnualCashFlowPoint[] {
+  const points: AnnualCashFlowPoint[] = []
+  for (let monthIndex0 = 0; monthIndex0 < 12; monthIndex0++) {
+    const key = `${year}-${String(monthIndex0 + 1).padStart(2, '0')}`
+    const { entradas, saidas } = monthTotals(transactions, key)
+    points.push({ key, label: MONTH_LABELS[monthIndex0], entradas, saidas })
+  }
+  return points
+}
+
 /** Total de saídas num intervalo de datas (inclusive). Transferências entre contas próprias não
  * entram aqui — não são despesa real, o dinheiro só mudou de conta. */
 export function saidasBetween(transactions: Transaction[], fromIso: string, toIso: string): number {
@@ -177,6 +222,14 @@ export function saidasNoAno(transactions: Transaction[], key: string): number {
   return transactions
     .filter((t) => t.direction === 'saida' && yearKey(t.date) === key && !isInternalTransferKind(t.kind))
     .reduce((s, t) => s + t.amount, 0)
+}
+
+/** Anos com pelo menos um lançamento, do mais recente para o mais antigo — sempre inclui o ano atual
+ * (mesmo sem nenhum lançamento nele), para o seletor de ano nunca ficar vazio num sistema novo. */
+export function availableYears(transactions: Transaction[]): number[] {
+  const years = new Set<number>(transactions.map((t) => Number(yearKey(t.date))))
+  years.add(new Date(todayIso()).getFullYear())
+  return [...years].sort((a, b) => b - a)
 }
 
 export function daysInMonth(year: number, monthIndex0: number): number {
@@ -276,6 +329,78 @@ export function costCenterIncomeInMonth(transactions: Transaction[], costCenterI
     .filter((t) => t.direction === 'entrada' && monthKey(t.date) === key && t.costCenterId === costCenterId && !isInternalTransferKind(t.kind))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
   return { total: items.reduce((s, t) => s + t.amount, 0), count: items.length, items }
+}
+
+export interface CostCenterSpendShare {
+  costCenterId: string
+  name: string
+  emoji: string
+  color: string
+  total: number
+  /** 0-100. Zero quando não há nenhuma saída no mês (evita divisão por zero). */
+  pct: number
+}
+
+/** Distribuição das SAÍDAS (nunca Entradas — um Centro de Custo com Entradas associadas, ex.:
+ * reembolso, não deve distorcer este gráfico de despesas) entre os Centros de Custo num mês
+ * específico. Reaproveita `costCenterSpendInMonth` por centro; só entram os que tiveram gasto (>0)
+ * naquele mês, ordenados do maior para o menor. */
+export function costCenterSpendShareInMonth(
+  transactions: Transaction[],
+  costCenters: CostCenter[],
+  key: string,
+): CostCenterSpendShare[] {
+  const rows = costCenters
+    .map((cc) => ({ cc, total: costCenterSpendInMonth(transactions, cc.id, key).total }))
+    .filter((r) => r.total > 0)
+  const grandTotal = rows.reduce((s, r) => s + r.total, 0)
+  return rows
+    .map((r) => ({
+      costCenterId: r.cc.id,
+      name: r.cc.name,
+      emoji: r.cc.emoji,
+      color: r.cc.color,
+      total: r.total,
+      pct: grandTotal > 0 ? (r.total / grandTotal) * 100 : 0,
+    }))
+    .sort((a, b) => b.total - a.total)
+}
+
+export interface AccountEntriesSummary {
+  accountId: string
+  accountLabel: string
+  total: number
+}
+
+export interface MonthEntriesSummary {
+  key: string
+  /** TUDO que entrou nas contas naquele mês — inclui transferências recebidas entre contas próprias,
+   * estornos, reembolsos etc. Nunca exclui uma entrada só porque ela foi identificada como
+   * transferência interna (ver `receitaReal` para a métrica que faz essa distinção). */
+  totalEntradas: number
+  /** Dinheiro novo recebido no mês — mesmo critério já usado em `monthTotals`/relatórios (exclui
+   * transferências entre contas próprias, que só mudam de conta, nunca dinheiro novo). */
+  receitaReal: number
+  /** Só contas com pelo menos uma entrada no mês, maior valor primeiro. */
+  byAccount: AccountEntriesSummary[]
+}
+
+/** Resumo de Entradas de um mês específico, por conta — base da aba Receitas. Usa sempre
+ * `transaction.date` (nunca `createdAt`, data de importação ou o mês que estava aberto ao importar). */
+export function monthEntriesSummary(transactions: Transaction[], accounts: Account[], key: string): MonthEntriesSummary {
+  const monthEntries = transactions.filter((t) => t.direction === 'entrada' && monthKey(t.date) === key)
+  const totalEntradas = monthEntries.reduce((s, t) => s + t.amount, 0)
+  const receitaReal = monthEntries.filter((t) => !isInternalTransferKind(t.kind)).reduce((s, t) => s + t.amount, 0)
+
+  const byAccountMap = new Map<string, number>()
+  for (const t of monthEntries) byAccountMap.set(t.accountId, (byAccountMap.get(t.accountId) ?? 0) + t.amount)
+
+  const byAccount = accounts
+    .map((acc) => ({ accountId: acc.id, accountLabel: acc.nickname || acc.bank, total: byAccountMap.get(acc.id) ?? 0 }))
+    .filter((a) => a.total > 0)
+    .sort((a, b) => b.total - a.total)
+
+  return { key, totalEntradas, receitaReal, byAccount }
 }
 
 /** Deriva o status exibido de uma conta a pagar — "vencida" nunca é gravado, é calculado. */

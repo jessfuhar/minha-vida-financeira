@@ -288,42 +288,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [transactions, bills, goals],
   )
 
-  // ---------- Transactions ----------
-  const addTransaction = useCallback(async (input: NewTransaction) => {
-    const transaction: Transaction = {
-      ...input,
-      source: input.source ?? 'manual',
-      status: input.status ?? computeTransactionStatus(input),
-      id: generateId(),
-      createdAt: now(),
-      updatedAt: now(),
-    }
-    await putItem('transactions', transaction)
-    setTransactions((prev) => [...prev, transaction])
-    return transaction
-  }, [])
-
-  /** Inserção em lote (usada pela importação de extratos) — grava tudo no IndexedDB e
-   * atualiza o estado numa única passada, em vez de uma chamada `addTransaction` por linha. */
-  const addTransactionsBatch = useCallback(async (inputs: NewTransaction[]) => {
-    const created: Transaction[] = inputs.map((input) => ({
-      ...input,
-      source: input.source ?? 'importado',
-      status: input.status ?? computeTransactionStatus(input),
-      id: generateId(),
-      createdAt: now(),
-      updatedAt: now(),
-    }))
-    await Promise.all(created.map((t) => putItem('transactions', t)))
-    setTransactions((prev) => [...prev, ...created])
-    return created
-  }, [])
-
   // ---------- Regras de classificação aprendidas ----------
   // Nunca usa data, hora, valor ou documento/identificador variável (FITID etc.) como identidade da
   // regra — `sanitizeCounterpartyForRule` limpa o texto bruto e `normalizeCounterpartyKey` normaliza
   // o que sobra (ver lib/importCounterparty.ts). Isso vale tanto para a chave de correspondência
-  // (`pattern`) quanto para o texto exibido nas telas (`label`).
+  // (`pattern`) quanto para o texto exibido nas telas (`label`). Declarada antes de qualquer função de
+  // escrita de Transaction (`addTransaction`/`updateTransaction`/`bulkUpdateTransactions`) para que
+  // todas possam chamá-la — aprendizado nunca fica restrito a um único caminho de classificação.
   const saveClassificationRule = useCallback(
     async (input: { counterparty: string; categoryId: string | null; costCenterId: string | null }) => {
       const cleanCounterparty = sanitizeCounterpartyForRule(input.counterparty)
@@ -392,10 +363,49 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [classificationRules],
   )
 
-  /** Aprendizado imediato: toda vez que uma classificação manual define um Centro de Custo, a
-   * contraparte (já normalizada) passa a ter regra salva — sem exigir nenhuma ação extra da usuária.
-   * A regra nunca CLASSIFICA sozinha lançamentos existentes: ela só passa a alimentar a sugestão
-   * (`suggestClassification`, ver lib/importRules.ts) que a usuária aplica manualmente. */
+  // ---------- Transactions ----------
+  /** Aprendizado imediato: toda vez que uma classificação manual define um Centro de Custo — seja
+   * criando um lançamento novo já classificado, seja editando um existente — a contraparte (já
+   * normalizada) passa a ter regra salva, sem exigir nenhuma ação extra da usuária. A regra nunca
+   * CLASSIFICA sozinha outros lançamentos: ela só passa a alimentar a sugestão
+   * (`suggestClassification`, ver lib/importRules.ts) que a usuária aplica manualmente, em qualquer
+   * mês/ano — nunca só nos lançamentos futuros ou nos da importação em andamento. */
+  const addTransaction = useCallback(
+    async (input: NewTransaction) => {
+      const transaction: Transaction = {
+        ...input,
+        source: input.source ?? 'manual',
+        status: input.status ?? computeTransactionStatus(input),
+        id: generateId(),
+        createdAt: now(),
+        updatedAt: now(),
+      }
+      await putItem('transactions', transaction)
+      setTransactions((prev) => [...prev, transaction])
+      if (transaction.costCenterId) {
+        await saveClassificationRule({ counterparty: transaction.counterparty ?? '', categoryId: transaction.categoryId, costCenterId: transaction.costCenterId })
+      }
+      return transaction
+    },
+    [saveClassificationRule],
+  )
+
+  /** Inserção em lote (usada pela importação de extratos) — grava tudo no IndexedDB e
+   * atualiza o estado numa única passada, em vez de uma chamada `addTransaction` por linha. */
+  const addTransactionsBatch = useCallback(async (inputs: NewTransaction[]) => {
+    const created: Transaction[] = inputs.map((input) => ({
+      ...input,
+      source: input.source ?? 'importado',
+      status: input.status ?? computeTransactionStatus(input),
+      id: generateId(),
+      createdAt: now(),
+      updatedAt: now(),
+    }))
+    await Promise.all(created.map((t) => putItem('transactions', t)))
+    setTransactions((prev) => [...prev, ...created])
+    return created
+  }, [])
+
   const updateTransaction = useCallback(
     async (id: string, patch: Partial<NewTransaction>) => {
       const existing = transactions.find((t) => t.id === id)
@@ -959,6 +969,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
         level: 'atencao',
         title: `${uncategorized.length} lançamento${uncategorized.length > 1 ? 's' : ''} aguardando classificação`,
         description: 'Defina centro de custo e categoria para manter os relatórios em dia.',
+        // Leva direto para o Fluxo de Caixa já com o filtro de status ativado — nunca só a tela em
+        // branco, a usuária precisa chegar exatamente onde resolve a pendência.
+        state: { statusFilter: 'aguardando_classificacao' },
       })
     }
 

@@ -23,7 +23,7 @@ export function AttentionList({ alerts }: { alerts: AttentionAlert[] }) {
           <li key={alert.id}>
             <button
               type="button"
-              onClick={destination ? () => navigate(destination) : undefined}
+              onClick={destination ? () => navigate(destination, alert.state ? { state: alert.state } : undefined) : undefined}
               disabled={!destination}
               className="flex w-full items-center gap-2.5 py-2.5 text-left transition-colors first:pt-0 last:pb-0 disabled:cursor-default enabled:hover:text-rose-700"
             >

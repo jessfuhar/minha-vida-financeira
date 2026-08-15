@@ -7,7 +7,7 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { Select } from '../components/ui/FormField'
 import { SearchInput } from '../components/ui/SearchInput'
 import { MonthYearSelector } from '../components/ui/MonthYearSelector'
-import { CashFlowChart } from '../components/charts/CashFlowChart'
+import { MonthCashFlowChart } from '../components/charts/MonthCashFlowChart'
 import { TransactionsTable } from '../components/transactions/TransactionsTable'
 import { TransactionFormModal, type TransactionFormValues } from '../components/transactions/TransactionFormModal'
 import { TransferFormModal, type TransferFormValues } from '../components/transactions/TransferFormModal'
@@ -23,7 +23,7 @@ import { useToast } from '../components/ui/Toast'
 import { useConfirm } from '../components/ui/Confirm'
 import { useData } from '../context/DataContext'
 import { usePeriod } from '../context/PeriodContext'
-import { monthlyCashFlowSeries, dailyCashFlowSeries, monthKey, monthTotals, todayIso, nextCostCenterColor } from '../lib/aggregations'
+import { dailyCashFlowSeriesForMonth, monthKey, monthTotals, todayIso, nextCostCenterColor } from '../lib/aggregations'
 import { formatCurrency, parseCurrencyInput } from '../lib/format'
 import { useSelection } from '../lib/useSelection'
 import { buildHistorySuggestionIndex, suggestClassification, type ClassificationSuggestion } from '../lib/importRules'
@@ -36,11 +36,6 @@ import { TrendingUp, TrendingDown, Scale, Plus, ArrowLeftRight, Upload, Repeat }
 import type { Transaction } from '../db/models'
 import type { ParsedStatementRow } from '../lib/importParsers'
 import type { TransactionDirection } from '../data/types'
-
-const periods = [
-  { id: 'mensal', label: 'Últimos 6 meses' },
-  { id: 'diario', label: 'Últimos 6 dias' },
-] as const
 
 export default function CashFlow() {
   const {
@@ -69,7 +64,6 @@ export default function CashFlow() {
   const confirm = useConfirm()
   const selection = useSelection()
 
-  const [chartPeriod, setChartPeriod] = useState<(typeof periods)[number]['id']>('mensal')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [newTransactionPrefill, setNewTransactionPrefill] = useState<Partial<TransactionFormValues> | null>(null)
@@ -81,10 +75,13 @@ export default function CashFlow() {
   const [bulkModal, setBulkModal] = useState<'categoria' | 'centroDeCusto' | 'conta' | 'status' | null>(null)
 
   const [filterAccount, setFilterAccount] = useState('')
+  const [filterStatus, setFilterStatus] = useState<Transaction['status'] | ''>('')
   const [search, setSearch] = useState('')
   const sort = useTransactionSort()
 
-  const data = chartPeriod === 'mensal' ? monthlyCashFlowSeries(accounts, transactions) : dailyCashFlowSeries(accounts, transactions)
+  // Gráfico mostra SEMPRE só o mês/ano selecionado no seletor global (nunca uma janela de "últimos
+  // N meses/dias" independente) — cada ponto usa a data real do lançamento (`transaction.date`).
+  const data = useMemo(() => dailyCashFlowSeriesForMonth(transactions, selectedPeriod), [transactions, selectedPeriod])
 
   // Cards (Entradas/Saídas/Resultado) usam SEMPRE a data do lançamento (nunca createdAt/importação)
   // e o mesmo período mensal escolhido no seletor global — reaproveita `monthTotals`, que já trata
@@ -101,9 +98,10 @@ export default function CashFlow() {
       periodTransactions.filter(
         (t) =>
           (!filterAccount || t.accountId === filterAccount) &&
+          (!filterStatus || t.status === filterStatus) &&
           matchesQuery(transactionSearchFields(t, costCenters, accounts), search),
       ),
-    [periodTransactions, filterAccount, search, costCenters, accounts],
+    [periodTransactions, filterAccount, filterStatus, search, costCenters, accounts],
   )
 
   const sortedTransactions = useMemo(
@@ -143,14 +141,19 @@ export default function CashFlow() {
   }
 
   // Permite chegar aqui a partir de um resultado clicável da busca geral (/buscar), já abrindo o
-  // lançamento correspondente para edição — sem navegação quebrada.
+  // lançamento correspondente para edição — sem navegação quebrada. Também usado pelas notificações
+  // ("N lançamentos aguardando classificação"): chegam aqui já com o filtro de status ativado, sem
+  // precisar a usuária configurá-lo manualmente.
   const location = useLocation()
   const navigate = useNavigate()
   useEffect(() => {
-    const targetId = (location.state as { openTransactionId?: string } | null)?.openTransactionId
-    if (!targetId) return
-    const tx = transactions.find((t) => t.id === targetId)
-    if (tx) openEdit(tx)
+    const state = location.state as { openTransactionId?: string; statusFilter?: Transaction['status'] } | null
+    if (!state) return
+    if (state.openTransactionId) {
+      const tx = transactions.find((t) => t.id === state.openTransactionId)
+      if (tx) openEdit(tx)
+    }
+    if (state.statusFilter) setFilterStatus(state.statusFilter)
     navigate(location.pathname, { replace: true, state: null })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state])
@@ -400,40 +403,20 @@ export default function CashFlow() {
       </div>
 
       <Card>
-        <CardTitle
-          hint={
-            <div className="flex rounded-full bg-[var(--color-neutral-100)] p-1">
-              {periods.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => setChartPeriod(p.id)}
-                  className={[
-                    'rounded-full px-3 py-1.5 text-[12.5px] font-medium transition-colors',
-                    chartPeriod === p.id ? 'bg-white text-rose-800 shadow-sm' : 'text-neutral-500 hover:text-neutral-700',
-                  ].join(' ')}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          }
-        >
-          Entradas, saídas e saldo acumulado
-        </CardTitle>
+        <CardTitle>Entradas e saídas · {periodLabel}</CardTitle>
         <p className="-mt-3 mb-4 text-[12px] text-neutral-400">
-          Este gráfico mostra uma janela de tendência ({chartPeriod === 'mensal' ? 'últimos 6 meses' : 'últimos 6 dias'}), independente do
-          período selecionado acima — os cards e a tabela abaixo mostram especificamente {periodLabel}.
+          Distribuição diária somente de {periodLabel} — para trocar o mês, use o seletor acima.
         </p>
-        {transactions.length === 0 ? (
+        {periodTransactions.length === 0 ? (
           <EmptyState
             icon={ArrowLeftRight}
-            title="Nenhum lançamento ainda"
-            description="Registre entradas e saídas para acompanhar sua evolução aqui."
+            title="Nenhum lançamento neste mês"
+            description="Registre entradas e saídas para acompanhar a evolução de cada dia aqui."
             actionLabel="+ Novo lançamento"
             onAction={openNew}
           />
         ) : (
-          <CashFlowChart data={data} height={340} />
+          <MonthCashFlowChart data={data} height={300} />
         )}
       </Card>
 
@@ -456,10 +439,22 @@ export default function CashFlow() {
                   </option>
                 ))}
               </Select>
-              {search && (
+              <Select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value as Transaction['status'] | '')}
+                className="!w-auto !py-1.5 !text-[12.5px]"
+              >
+                <option value="">Todos os status</option>
+                <option value="classificado">Classificado</option>
+                <option value="aguardando_classificacao">Aguardando classificação</option>
+              </Select>
+              {(search || filterStatus) && (
                 <button
                   type="button"
-                  onClick={() => setSearch('')}
+                  onClick={() => {
+                    setSearch('')
+                    setFilterStatus('')
+                  }}
                   className="rounded-full px-2.5 py-1.5 text-[12.5px] font-medium text-rose-700 hover:underline"
                 >
                   Limpar
