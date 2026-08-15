@@ -16,19 +16,19 @@ interface StatTileProps {
 export function StatTile({ label, value, icon: Icon, accent, deltaLabel, deltaDirection, trend }: StatTileProps) {
   const isUp = deltaDirection === 'up'
   return (
-    <Card className="flex flex-col gap-4">
+    <Card className="flex flex-col gap-3">
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-[13px] font-medium text-neutral-500">{label}</p>
-          <p className="mt-1.5 font-display text-[24px] font-semibold text-neutral-900 tabular-nums lg:text-[26px]">
+          <p className="text-[12.5px] font-medium text-neutral-500">{label}</p>
+          <p className="mt-1 font-display text-[22px] font-semibold text-neutral-900 tabular-nums lg:text-[24px]">
             {value}
           </p>
         </div>
         <div
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
           style={{ background: `color-mix(in srgb, ${accent} 14%, white)` }}
         >
-          <Icon size={19} style={{ color: accent }} strokeWidth={2} />
+          <Icon size={18} style={{ color: accent }} strokeWidth={2} />
         </div>
       </div>
 

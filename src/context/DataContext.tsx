@@ -11,6 +11,7 @@ import type {
   PlannedItem,
   Profile,
   ClassificationRule,
+  DashboardLayout,
 } from '../db/models'
 import {
   getAll,
@@ -22,10 +23,12 @@ import {
   saveProfile,
   loadSpendingLimits,
   saveSpendingLimits,
+  loadDashboardLayout,
+  saveDashboardLayout,
 } from '../db/storage'
 import { accountBalanceNow, totalBalanceNow, monthTotals, monthKey, todayIso, daysUntil } from '../lib/aggregations'
 import { isInternalTransferKind } from '../lib/transactionKind'
-import { normalizeCounterpartyKey } from '../lib/importCounterparty'
+import { normalizeCounterpartyKey, sanitizeCounterpartyForRule } from '../lib/importCounterparty'
 import { validateTransferPair } from '../lib/transferDetection'
 import { brand } from '../config/brand'
 import type { AttentionAlert } from '../data/types'
@@ -37,6 +40,14 @@ type NewBill = Omit<Bill, 'id' | 'createdAt' | 'updatedAt' | 'status'> & { statu
 type NewGoal = Omit<Goal, 'id' | 'createdAt' | 'updatedAt' | 'saved'>
 type NewGoalContribution = Omit<GoalContribution, 'id' | 'createdAt' | 'updatedAt'>
 type NewPlannedItem = Omit<PlannedItem, 'id' | 'createdAt' | 'updatedAt'>
+
+/** Ordem/visibilidade padrão do painel inicial — usada tanto no primeiro carregamento quanto em
+ * "Restaurar organização padrão" (Configurações → Personalizar painel). */
+const DEFAULT_DASHBOARD_LAYOUT: DashboardLayout = {
+  order: ['stats', 'accounts', 'cashflow', 'attention', 'goal', 'favoriteCostCenters', 'recentTransactions'],
+  hidden: [],
+  favoriteCostCenterIds: [],
+}
 
 function computeTransactionStatus(input: {
   kind: Transaction['kind']
@@ -62,6 +73,7 @@ interface DataContextValue {
   spendingLimits: SpendingLimits
   profile: Profile
   classificationRules: ClassificationRule[]
+  dashboardLayout: DashboardLayout
 
   addAccount: (input: NewAccount) => Promise<Account>
   updateAccount: (id: string, patch: Partial<NewAccount>) => Promise<void>
@@ -124,6 +136,10 @@ interface DataContextValue {
 
   updateProfile: (patch: Partial<Profile>) => void
 
+  updateDashboardLayout: (patch: Partial<DashboardLayout>) => void
+  toggleFavoriteCostCenter: (costCenterId: string) => void
+  resetDashboardLayout: () => void
+
   accountBalance: (accountId: string) => number
   totalBalance: number
   monthSummary: { entradas: number; saidas: number; resultado: number }
@@ -162,6 +178,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [plannedItems, setPlannedItems] = useState<PlannedItem[]>([])
   const [spendingLimits, setSpendingLimits] = useState<SpendingLimits>(() => loadSpendingLimits<SpendingLimits>({}))
   const [profile, setProfile] = useState<Profile>(() => loadProfile<Profile>({ name: brand.userName }))
+  const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(() =>
+    loadDashboardLayout<DashboardLayout>(DEFAULT_DASHBOARD_LAYOUT),
+  )
   const [classificationRules, setClassificationRules] = useState<ClassificationRule[]>([])
 
   useEffect(() => {
@@ -492,9 +511,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
   )
 
   // ---------- Regras de classificação aprendidas ----------
+  // Nunca usa data, hora, valor ou documento/identificador variável (FITID etc.) como identidade da
+  // regra — `sanitizeCounterpartyForRule` limpa o texto bruto e `normalizeCounterpartyKey` normaliza
+  // o que sobra (ver lib/importCounterparty.ts). Isso vale tanto para a chave de correspondência
+  // (`pattern`) quanto para o texto exibido nas telas (`label`).
   const saveClassificationRule = useCallback(
     async (input: { counterparty: string; categoryId: string | null; costCenterId: string | null }) => {
-      const pattern = normalizeCounterpartyKey(input.counterparty)
+      const cleanCounterparty = sanitizeCounterpartyForRule(input.counterparty)
+      if (!cleanCounterparty) return
+      const pattern = normalizeCounterpartyKey(cleanCounterparty)
       if (!pattern) return
       const existing = classificationRules.find((r) => r.pattern === pattern)
       if (existing) {
@@ -511,7 +536,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         const rule: ClassificationRule = {
           id: generateId(),
           pattern,
-          label: input.counterparty.trim(),
+          label: cleanCounterparty,
           categoryId: input.categoryId,
           costCenterId: input.costCenterId,
           active: true,
@@ -824,6 +849,32 @@ export function DataProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
+  // ---------- Personalização do painel (Configurações → Personalizar painel + "Organizar painel") ----------
+  const updateDashboardLayout = useCallback((patch: Partial<DashboardLayout>) => {
+    setDashboardLayout((prev) => {
+      const updated = { ...prev, ...patch }
+      saveDashboardLayout(updated)
+      return updated
+    })
+  }, [])
+
+  const toggleFavoriteCostCenter = useCallback((costCenterId: string) => {
+    setDashboardLayout((prev) => {
+      const isFavorite = prev.favoriteCostCenterIds.includes(costCenterId)
+      const favoriteCostCenterIds = isFavorite
+        ? prev.favoriteCostCenterIds.filter((id) => id !== costCenterId)
+        : [...prev.favoriteCostCenterIds, costCenterId]
+      const updated = { ...prev, favoriteCostCenterIds }
+      saveDashboardLayout(updated)
+      return updated
+    })
+  }, [])
+
+  const resetDashboardLayout = useCallback(() => {
+    setDashboardLayout(DEFAULT_DASHBOARD_LAYOUT)
+    saveDashboardLayout(DEFAULT_DASHBOARD_LAYOUT)
+  }, [])
+
   // ---------- Derived ----------
   const accountBalance = useCallback((accountId: string) => {
     const acc = accounts.find((a) => a.id === accountId)
@@ -918,6 +969,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     plannedItems,
     spendingLimits,
     profile,
+    dashboardLayout,
     classificationRules,
     addAccount,
     updateAccount,
@@ -961,6 +1013,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
     deletePlannedItem,
     updateSpendingLimits,
     updateProfile,
+    updateDashboardLayout,
+    toggleFavoriteCostCenter,
+    resetDashboardLayout,
     accountBalance,
     totalBalance,
     monthSummary,

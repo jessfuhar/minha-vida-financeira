@@ -4,7 +4,7 @@ import { SearchInput } from '../ui/SearchInput'
 import { EmptyState } from '../ui/EmptyState'
 import { TransactionsTable } from '../transactions/TransactionsTable'
 import { formatCurrency } from '../../lib/format'
-import { categorySpendInMonth, costCenterSpendInMonth } from '../../lib/aggregations'
+import { categorySpendInMonth, categoryIncomeInMonth, costCenterSpendInMonth, costCenterIncomeInMonth } from '../../lib/aggregations'
 import { matchesQuery, normalizeSearchText, transactionSearchFields } from '../../lib/textSearch'
 import { sortTransactions, useTransactionSort } from '../../lib/sorting'
 import { ChevronLeft, ArrowLeftRight, Pencil } from 'lucide-react'
@@ -80,21 +80,30 @@ export function CostCenterDetailModal({
     [transactions, costCenter, period],
   )
 
+  // Entradas do centro de custo — sempre exibidas separadamente do gasto (centerTotal), nunca somadas.
+  const centerIncome = useMemo(
+    () => (costCenter ? costCenterIncomeInMonth(transactions, costCenter.id, period) : { total: 0, count: 0, items: [] as Transaction[] }),
+    [transactions, costCenter, period],
+  )
+
   const categoryRows = useMemo(() => {
     if (!costCenter) return []
     const rows = costCenter.categories.map((cat) => ({
       category: cat,
       spend: categorySpendInMonth(transactions, costCenter.id, cat.id, period),
+      income: categoryIncomeInMonth(transactions, costCenter.id, cat.id, period),
     }))
-    const uncategorized = centerTotal.items.filter((t) => !t.categoryId)
-    if (uncategorized.length > 0) {
+    const uncategorizedSaida = centerTotal.items.filter((t) => !t.categoryId)
+    const uncategorizedEntrada = centerIncome.items.filter((t) => !t.categoryId)
+    if (uncategorizedSaida.length > 0 || uncategorizedEntrada.length > 0) {
       rows.push({
         category: { id: NO_CATEGORY_ID, name: 'Sem categoria' },
-        spend: { total: uncategorized.reduce((s, t) => s + t.amount, 0), count: uncategorized.length, items: uncategorized },
+        spend: { total: uncategorizedSaida.reduce((s, t) => s + t.amount, 0), count: uncategorizedSaida.length, items: uncategorizedSaida },
+        income: { total: uncategorizedEntrada.reduce((s, t) => s + t.amount, 0), count: uncategorizedEntrada.length, items: uncategorizedEntrada },
       })
     }
     return rows
-  }, [costCenter, transactions, period, centerTotal])
+  }, [costCenter, transactions, period, centerTotal, centerIncome])
 
   const visibleCategoryRows = useMemo(() => {
     const q = normalizeSearchText(search)
@@ -103,16 +112,20 @@ export function CostCenterDetailModal({
       : categoryRows.filter(
           (row) =>
             matchesQuery([row.category.name], search) ||
-            row.spend.items.some((t) => matchesQuery(transactionSearchFields(t, costCenters, accounts), search)),
+            row.spend.items.some((t) => matchesQuery(transactionSearchFields(t, costCenters, accounts), search)) ||
+            row.income.items.some((t) => matchesQuery(transactionSearchFields(t, costCenters, accounts), search)),
         )
-    // Categorias com movimentação no período primeiro, depois as zeradas — nunca escondidas.
+    // Categorias com movimentação (saída OU entrada) no período primeiro, depois as zeradas — nunca escondidas.
     return [...filtered].sort((a, b) => {
-      if (a.spend.count > 0 && b.spend.count === 0) return -1
-      if (a.spend.count === 0 && b.spend.count > 0) return 1
+      const aCount = a.spend.count + a.income.count
+      const bCount = b.spend.count + b.income.count
+      if (aCount > 0 && bCount === 0) return -1
+      if (aCount === 0 && bCount > 0) return 1
       return b.spend.total - a.spend.total
     })
   }, [categoryRows, search, costCenters, accounts])
 
+  // Saídas ("gasto") da categoria aberta — total exibido em destaque, nunca somado às entradas.
   const activeCategorySpend = useMemo(() => {
     if (!costCenter || !activeCategory) return { total: 0, count: 0, items: [] as Transaction[] }
     if (activeCategory.id === NO_CATEGORY_ID) {
@@ -122,9 +135,26 @@ export function CostCenterDetailModal({
     return categorySpendInMonth(transactions, costCenter.id, activeCategory.id, period)
   }, [costCenter, activeCategory, transactions, period, centerTotal])
 
+  // Entradas da categoria aberta — sempre exibidas separadamente das saídas acima.
+  const activeCategoryIncome = useMemo(() => {
+    if (!costCenter || !activeCategory) return { total: 0, count: 0, items: [] as Transaction[] }
+    if (activeCategory.id === NO_CATEGORY_ID) {
+      const items = centerIncome.items.filter((t) => !t.categoryId)
+      return { total: items.reduce((s, t) => s + t.amount, 0), count: items.length, items }
+    }
+    return categoryIncomeInMonth(transactions, costCenter.id, activeCategory.id, period)
+  }, [costCenter, activeCategory, transactions, period, centerIncome])
+
+  // Lista de lançamentos exibida na tabela: saídas + entradas juntas (a tabela já distingue a
+  // direção de cada linha), só os totais do rodapé é que nunca se misturam.
+  const activeCategoryAllItems = useMemo(
+    () => [...activeCategorySpend.items, ...activeCategoryIncome.items],
+    [activeCategorySpend.items, activeCategoryIncome.items],
+  )
+
   const searchedCategoryItems = useMemo(
-    () => activeCategorySpend.items.filter((t) => matchesQuery(transactionSearchFields(t, costCenters, accounts), search)),
-    [activeCategorySpend.items, search, costCenters, accounts],
+    () => activeCategoryAllItems.filter((t) => matchesQuery(transactionSearchFields(t, costCenters, accounts), search)),
+    [activeCategoryAllItems, search, costCenters, accounts],
   )
 
   const sortedCategoryItems = useMemo(
@@ -157,7 +187,7 @@ export function CostCenterDetailModal({
       title={`${costCenter.emoji} ${costCenter.name}`}
       subtitle={
         view === 'categories'
-          ? `${periodLabel} · ${formatCurrency(centerTotal.total)} · ${centerTotal.count} lançamento${centerTotal.count === 1 ? '' : 's'}`
+          ? `${periodLabel} · Saídas ${formatCurrency(centerTotal.total)}${centerIncome.count > 0 ? ` · Entradas ${formatCurrency(centerIncome.total)}` : ''}`
           : `${costCenter.emoji} ${costCenter.name} → ${activeCategory?.name ?? ''} · ${periodLabel}`
       }
       width="xl"
@@ -204,7 +234,7 @@ export function CostCenterDetailModal({
               <EmptyState icon={ArrowLeftRight} title="Nenhuma categoria encontrada" description={`Nenhum resultado para "${search}".`} />
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {visibleCategoryRows.map(({ category, spend }) => (
+                {visibleCategoryRows.map(({ category, spend, income }) => (
                   <div
                     key={category.id}
                     className="group flex flex-col gap-2 rounded-xl border border-[var(--border-hairline)] p-4 text-left transition-colors hover:border-rose-200"
@@ -264,6 +294,11 @@ export function CostCenterDetailModal({
                       <p className="text-[12px] text-neutral-500">
                         {spend.count} lançamento{spend.count === 1 ? '' : 's'}
                       </p>
+                      {income.count > 0 && (
+                        <p className="mt-1 text-[12px] font-medium text-[var(--color-status-good)]">
+                          + {formatCurrency(income.total)} em entrada{income.count === 1 ? '' : 's'}
+                        </p>
+                      )}
                     </button>
                   </div>
                 ))}
@@ -308,7 +343,7 @@ export function CostCenterDetailModal({
               description={
                 search
                   ? `Nenhum resultado para "${search}" em ${periodLabel}.`
-                  : `Nenhuma saída registrada em "${activeCategory?.name}" em ${periodLabel}.`
+                  : `Nenhuma movimentação registrada em "${activeCategory?.name}" em ${periodLabel}.`
               }
             />
           ) : (
@@ -322,9 +357,18 @@ export function CostCenterDetailModal({
                 sortDir={sort.sortDir}
                 onSortChange={sort.onSortChange}
               />
-              <div className="mt-3 flex items-center justify-end gap-2 border-t border-[var(--border-hairline)] pt-3 text-[13.5px]">
-                <span className="text-neutral-500">Total</span>
-                <span className="font-semibold tabular-nums text-neutral-900">{formatCurrency(activeCategorySpend.total)}</span>
+              {/* Saídas e Entradas sempre em linhas separadas — nunca somadas num único "Total". */}
+              <div className="mt-3 flex flex-wrap items-center justify-end gap-x-5 gap-y-1 border-t border-[var(--border-hairline)] pt-3 text-[13.5px]">
+                <span className="flex items-center gap-2">
+                  <span className="text-neutral-500">Saídas</span>
+                  <span className="font-semibold tabular-nums text-neutral-900">{formatCurrency(activeCategorySpend.total)}</span>
+                </span>
+                {activeCategoryIncome.count > 0 && (
+                  <span className="flex items-center gap-2">
+                    <span className="text-neutral-500">Entradas</span>
+                    <span className="font-semibold tabular-nums text-[var(--color-status-good)]">{formatCurrency(activeCategoryIncome.total)}</span>
+                  </span>
+                )}
               </div>
             </>
           )}

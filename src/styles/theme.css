@@ -1,55 +1,77 @@
 /**
  * Design tokens — "Minha vida financeira"
  *
- * Paleta principal (fornecida): #EB8A90 · #F09DA2 · #F5AFB5 · #FAC2C7 · #FFD4D9
- * A escala abaixo estende essa paleta com tons mais claros (fundos) e mais
- * escuros (texto de ênfase, estados ativos), e define uma paleta categórica
- * e de status validadas para uso nos gráficos (ver skill de dataviz —
- * checks de contraste e distinção para daltonismo).
+ * Identidade visual oficial:
+ *   Principal (Dark Amaranth)  #87152E  → --color-rose-700
+ *   Secundária (Sky Blue)      #88BFCE  → --color-sky-500 / --color-cat-teal
+ *   Terciária (Pearl Beige)    #FAE9C3  → --color-beige-300 / --color-status-warning-bg
+ *   Fundo (Snow)               #FAF3F5  → --surface-page
+ *   Preto                      #050404  → --text-primary
+ *   Branco                     #FFFFFF  → --surface-card
  *
- * Só este arquivo precisa mudar para re-temar o produto.
+ * As classes utilitárias existentes (bg-rose-700, text-rose-800, etc.) continuam funcionando sem
+ * precisar tocar em cada componente — só esta escala muda de valor para re-temar o produto. A
+ * paleta categórica/status permanece com significado reservado e distinguível da cor de marca (ver
+ * skill de dataviz — checks de contraste e distinção para daltonismo).
  */
 @theme {
   --font-display: 'Poppins', 'Inter', system-ui, sans-serif;
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
 
-  /* Rosa — cor de marca */
-  --color-rose-50: #fff6f7;
-  --color-rose-100: #ffd4d9;
-  --color-rose-200: #fac2c7;
-  --color-rose-300: #f5afb5;
-  --color-rose-400: #f09da2;
-  --color-rose-500: #eb8a90;
-  --color-rose-600: #dd7079;
-  --color-rose-700: #c9636f;
-  --color-rose-800: #a84550;
-  --color-rose-900: #7a2e37;
+  /* Amaranto — cor de marca (principal: #87152E = rose-700) */
+  --color-rose-50: #fbeef1;
+  --color-rose-100: #f5d6dc;
+  --color-rose-200: #e9adb9;
+  --color-rose-300: #d97e91;
+  --color-rose-400: #bd5468;
+  --color-rose-500: #a53751;
+  --color-rose-600: #96223d;
+  --color-rose-700: #87152e;
+  --color-rose-800: #6c1026;
+  --color-rose-900: #4f0c1d;
 
-  /* Neutros — cinza quente, combina com o rosa sem "esfriar" a tela */
-  --color-neutral-50: #fdfbfb;
-  --color-neutral-100: #f7f3f2;
-  --color-neutral-200: #efeae9;
-  --color-neutral-300: #e1dad8;
-  --color-neutral-400: #c7bebb;
-  --color-neutral-500: #a79d99;
-  --color-neutral-600: #857a76;
-  --color-neutral-700: #635a57;
-  --color-neutral-800: #423c3a;
-  --color-neutral-900: #241f1e;
+  /* Sky Blue — cor secundária (#88BFCE) */
+  --color-sky-50: #f1f8fa;
+  --color-sky-100: #dcedf1;
+  --color-sky-200: #c0dfe6;
+  --color-sky-300: #88bfce;
+  --color-sky-400: #64a9bb;
+  --color-sky-500: #4790a4;
+  --color-sky-600: #35768a;
+  --color-sky-700: #285d6d;
 
-  /* Categórica — identidade de séries em gráficos (validada p/ CVD) */
-  --color-cat-rose: #c9636f;
-  --color-cat-teal: #0f9488;
+  /* Pearl Beige — cor terciária (#FAE9C3) */
+  --color-beige-50: #fdf9ef;
+  --color-beige-100: #fbf1d9;
+  --color-beige-200: #fae9c3;
+  --color-beige-300: #f2d693;
+  --color-beige-400: #dcb85f;
+
+  /* Neutros — cinza quente discreto, sem competir com a cor de marca */
+  --color-neutral-50: #faf8f8;
+  --color-neutral-100: #f4f1f0;
+  --color-neutral-200: #e8e4e2;
+  --color-neutral-300: #d6cfcc;
+  --color-neutral-400: #b5aaa6;
+  --color-neutral-500: #94877f;
+  --color-neutral-600: #726459;
+  --color-neutral-700: #564b42;
+  --color-neutral-800: #362e2a;
+  --color-neutral-900: #1c1716;
+
+  /* Categórica — identidade de séries em gráficos (entradas/saídas usam a paleta oficial) */
+  --color-cat-rose: #87152e;
+  --color-cat-teal: #88bfce;
   --color-cat-amber: #b8720a;
   --color-cat-blue: #2c6cae;
   --color-cat-sage: #4f8c55;
   --color-cat-violet: #7a4fa0;
 
-  /* Status — significado reservado, sempre com ícone + texto */
+  /* Status — significado reservado, sempre com ícone + texto (distinto da cor de marca) */
   --color-status-good: #2f9e52;
   --color-status-good-bg: #eaf6ec;
-  --color-status-warning: #b5790f;
-  --color-status-warning-bg: #fbf1de;
+  --color-status-warning: #8a5f10;
+  --color-status-warning-bg: #fae9c3;
   --color-status-serious: #c15a2a;
   --color-status-serious-bg: #fbeae1;
   --color-status-critical: #c0304a;
@@ -58,13 +80,17 @@
 
 :root {
   color-scheme: light;
-  --surface-page: #fdf9f9;
+  --surface-page: #faf3f5;
   --surface-card: #ffffff;
   --surface-sunken: var(--color-rose-50);
-  --text-primary: #2a2222;
-  --text-secondary: #6b5f5d;
-  --text-muted: #9a8f8c;
-  --border-hairline: rgba(42, 34, 34, 0.08);
+  --text-primary: #050404;
+  --text-secondary: #564b42;
+  --text-muted: #94877f;
+  --border-hairline: rgba(5, 4, 4, 0.08);
+
+  /* Sombra "relevo" — separa cards do fundo sem pesar (item 5 da identidade visual) */
+  --shadow-card: 0 2px 4px rgba(5, 4, 4, 0.04), 0 8px 20px rgba(5, 4, 4, 0.06);
+  --shadow-card-hover: 0 4px 10px rgba(5, 4, 4, 0.06), 0 16px 32px rgba(5, 4, 4, 0.1);
 }
 
 html,
@@ -99,4 +125,28 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-neutral-400);
+}
+
+/**
+ * Microanimações discretas (item 15) — hover, modais, menus, troca de mês, drag-and-drop. Usadas de
+ * forma pontual (não em tudo) via estas classes utilitárias compartilhadas.
+ */
+.card-interactive {
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease;
+}
+.card-interactive:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-interactive {
+    transition: none;
+  }
+  .card-interactive:hover {
+    transform: none;
+  }
 }

@@ -212,7 +212,9 @@ export interface CategorySpend {
   items: Transaction[]
 }
 
-/** Saídas de uma categoria (dentro de um centro de custo) num mês específico. */
+/** Saídas ("gasto") de uma categoria (dentro de um centro de custo) num mês específico. Um Centro de
+ * Custo/categoria também pode ter Entradas associadas (ver `categoryIncomeInMonth`) — deliberadamente
+ * NUNCA somadas aqui, para que "gasto" nunca inclua dinheiro que entrou. */
 export function categorySpendInMonth(
   transactions: Transaction[],
   costCenterId: string,
@@ -232,11 +234,46 @@ export function categorySpendInMonth(
   return { total: items.reduce((s, t) => s + t.amount, 0), count: items.length, items }
 }
 
-/** Saídas de um centro de custo inteiro (todas as categorias + sem categoria) num mês específico —
- * mesma forma de `categorySpendInMonth`, para reaproveitar nos cards e no modal de Centro de Custo. */
+/** Saídas ("gasto") de um centro de custo inteiro (todas as categorias + sem categoria) num mês
+ * específico — mesma forma de `categorySpendInMonth`, para reaproveitar nos cards e no modal de
+ * Centro de Custo. Ver `costCenterIncomeInMonth` para as Entradas do mesmo centro (sempre separadas). */
 export function costCenterSpendInMonth(transactions: Transaction[], costCenterId: string, key: string): CategorySpend {
   const items = transactions
     .filter((t) => t.direction === 'saida' && monthKey(t.date) === key && t.costCenterId === costCenterId && !isInternalTransferKind(t.kind))
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+  return { total: items.reduce((s, t) => s + t.amount, 0), count: items.length, items }
+}
+
+/** Entradas de uma categoria (dentro de um centro de custo) num mês específico. Uma movimentação de
+ * Entrada também pode receber Centro de Custo/categoria (ex.: reembolso categorizado em "Casa") —
+ * mostrada sempre separadamente do gasto (`categorySpendInMonth`), nunca somada a ele como se fosse
+ * a mesma coisa. */
+export function categoryIncomeInMonth(
+  transactions: Transaction[],
+  costCenterId: string,
+  categoryId: string,
+  key: string,
+): CategorySpend {
+  const items = transactions
+    .filter(
+      (t) =>
+        t.direction === 'entrada' &&
+        monthKey(t.date) === key &&
+        t.costCenterId === costCenterId &&
+        t.categoryId === categoryId &&
+        !isInternalTransferKind(t.kind),
+    )
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+  return { total: items.reduce((s, t) => s + t.amount, 0), count: items.length, items }
+}
+
+/** Entradas de um centro de custo inteiro (todas as categorias + sem categoria) num mês específico —
+ * ver `costCenterSpendInMonth` (as Saídas do mesmo centro). Nunca somar os dois totais: um Centro de
+ * Custo com Entradas e Saídas deve sempre exibir "Entradas", "Saídas" e, quando fizer sentido,
+ * "Resultado" (Entradas − Saídas) como valores distintos — nunca um único "gasto" combinado. */
+export function costCenterIncomeInMonth(transactions: Transaction[], costCenterId: string, key: string): CategorySpend {
+  const items = transactions
+    .filter((t) => t.direction === 'entrada' && monthKey(t.date) === key && t.costCenterId === costCenterId && !isInternalTransferKind(t.kind))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
   return { total: items.reduce((s, t) => s + t.amount, 0), count: items.length, items }
 }

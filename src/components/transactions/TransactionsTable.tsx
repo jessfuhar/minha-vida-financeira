@@ -59,6 +59,18 @@ function SortableHeader({
   )
 }
 
+/** Monta o texto completo (nunca truncado) exibido no tooltip nativo (hover) de uma linha da
+ * tabela — reúne descrição, histórico/descrição original e contraparte, já que qualquer um dos três
+ * pode ter sido cortado visualmente pelo `truncate`. O clique (quando `onEdit` está disponível) abre
+ * o formulário de edição com todos os campos, incluindo os que nunca aparecem na tabela (documento,
+ * conta, categoria, centro de custo, observação). */
+function fullDescriptionTitle(t: Transaction): string {
+  const parts = [t.description]
+  if (t.originalDescription && t.originalDescription !== t.description) parts.push(t.originalDescription)
+  if (t.counterparty) parts.push(t.counterparty)
+  return parts.join(' — ')
+}
+
 export function resolveCostCenterName(costCenters: CostCenter[], costCenterId: string | null): string {
   if (!costCenterId) return '—'
   return costCenters.find((c) => c.id === costCenterId)?.name ?? '—'
@@ -153,26 +165,64 @@ export function TransactionsTable({
               )}
               <td className="whitespace-nowrap py-3 pr-4 text-neutral-500 tabular-nums">{formatDate(t.date)}</td>
               <td className="max-w-[220px] py-3 pr-4">
-                <p className="truncate font-medium text-neutral-800" title={t.originalDescription || undefined}>
-                  {t.description}
-                  {t.source === 'importado' && (
-                    <span className="ml-1.5 rounded-full bg-[var(--color-neutral-100)] px-1.5 py-0.5 align-middle text-[10px] font-medium text-neutral-500">
-                      Importado
-                    </span>
-                  )}
-                  {t.transferId && (
-                    <span
-                      className="ml-1.5 inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 align-middle text-[10px] font-medium"
-                      style={{ color: 'var(--color-neutral-600)', background: 'var(--color-neutral-100)' }}
-                    >
-                      <ArrowLeftRight size={9} /> Transferência
-                    </span>
-                  )}
-                </p>
-                {(t.counterparty || t.originalDescription || t.kind) && (
-                  <p className="truncate text-[11.5px] text-neutral-400">
-                    {[t.counterparty || t.originalDescription, transactionKindMeta[t.kind]?.label].filter(Boolean).join(' · ')}
-                  </p>
+                {/* Descrição truncada: acessível por completo via tooltip (hover) E clique (abre o
+                    mesmo formulário de edição já existente) — funciona também em telas de toque,
+                    onde não há hover. Quando não há onEdit disponível, o texto continua com o
+                    tooltip nativo, só sem o clique. */}
+                {onEdit ? (
+                  <button
+                    type="button"
+                    onClick={() => onEdit(t)}
+                    title={fullDescriptionTitle(t)}
+                    className="block w-full text-left"
+                    aria-label={`Ver detalhes de ${t.description}`}
+                  >
+                    <p className="truncate font-medium text-neutral-800 hover:text-rose-700">
+                      {t.description}
+                      {t.source === 'importado' && (
+                        <span className="ml-1.5 rounded-full bg-[var(--color-neutral-100)] px-1.5 py-0.5 align-middle text-[10px] font-medium text-neutral-500">
+                          Importado
+                        </span>
+                      )}
+                      {t.transferId && (
+                        <span
+                          className="ml-1.5 inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 align-middle text-[10px] font-medium"
+                          style={{ color: 'var(--color-neutral-600)', background: 'var(--color-neutral-100)' }}
+                        >
+                          <ArrowLeftRight size={9} /> Transferência
+                        </span>
+                      )}
+                    </p>
+                    {(t.counterparty || t.originalDescription || t.kind) && (
+                      <p className="truncate text-[11.5px] text-neutral-400">
+                        {[t.counterparty || t.originalDescription, transactionKindMeta[t.kind]?.label].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                  </button>
+                ) : (
+                  <>
+                    <p className="truncate font-medium text-neutral-800" title={fullDescriptionTitle(t)}>
+                      {t.description}
+                      {t.source === 'importado' && (
+                        <span className="ml-1.5 rounded-full bg-[var(--color-neutral-100)] px-1.5 py-0.5 align-middle text-[10px] font-medium text-neutral-500">
+                          Importado
+                        </span>
+                      )}
+                      {t.transferId && (
+                        <span
+                          className="ml-1.5 inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 align-middle text-[10px] font-medium"
+                          style={{ color: 'var(--color-neutral-600)', background: 'var(--color-neutral-100)' }}
+                        >
+                          <ArrowLeftRight size={9} /> Transferência
+                        </span>
+                      )}
+                    </p>
+                    {(t.counterparty || t.originalDescription || t.kind) && (
+                      <p className="truncate text-[11.5px] text-neutral-400" title={fullDescriptionTitle(t)}>
+                        {[t.counterparty || t.originalDescription, transactionKindMeta[t.kind]?.label].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                  </>
                 )}
               </td>
               <td className="py-3 pr-4">

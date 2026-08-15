@@ -271,7 +271,7 @@ export default function PiggyBank() {
           <button
             type="button"
             onClick={openNew}
-            className="flex min-h-[190px] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-rose-300 bg-rose-50/40 p-5 text-rose-700 transition-colors hover:bg-rose-50"
+            className="flex min-h-[190px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-rose-300 bg-rose-50/40 p-5 text-rose-700 transition-colors hover:bg-rose-50"
           >
             <Plus size={22} />
             <span className="text-[13.5px] font-medium">Criar nova meta</span>

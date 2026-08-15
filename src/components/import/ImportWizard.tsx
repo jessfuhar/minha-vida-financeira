@@ -499,7 +499,7 @@ export function ImportWizard({
                 onDragLeave={() => setDragOver(false)}
                 onDrop={onDrop}
                 className={[
-                  'flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors',
+                  'flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors',
                   dragOver ? 'border-rose-400 bg-rose-50/60' : 'border-[var(--border-hairline)] bg-[var(--color-neutral-100)]',
                 ].join(' ')}
               >

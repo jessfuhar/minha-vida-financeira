@@ -27,7 +27,7 @@ export function TopModulesBar({ onOpenMenu }: TopModulesBarProps) {
                 to={mod.path}
                 className={({ isActive }) =>
                   [
-                    'flex shrink-0 items-center gap-2 rounded-full px-3.5 py-2 text-[13.5px] font-medium transition-colors',
+                    'flex shrink-0 items-center gap-2 rounded-full px-3.5 py-2 text-[13.5px] font-medium transition-colors duration-200',
                     isActive
                       ? 'bg-rose-700 text-white shadow-sm shadow-rose-200'
                       : 'text-neutral-600 hover:bg-rose-50 hover:text-rose-800',

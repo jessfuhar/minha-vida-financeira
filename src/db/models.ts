@@ -165,3 +165,16 @@ export interface Profile {
   name: string
   photoDataUrl?: string
 }
+
+/** Chaves das seções personalizáveis do painel inicial (Dashboard) — mostrar/ocultar, reordenar
+ * (inclusive por drag-and-drop) e restaurar padrão, em Configurações → Personalizar painel. */
+export type DashboardSectionKey = 'stats' | 'accounts' | 'cashflow' | 'attention' | 'goal' | 'favoriteCostCenters' | 'recentTransactions'
+
+export interface DashboardLayout {
+  /** Ordem de exibição das seções — sempre contém todas as chaves de DashboardSectionKey. */
+  order: DashboardSectionKey[]
+  /** Seções ocultas pela usuária (as demais, visíveis). */
+  hidden: DashboardSectionKey[]
+  /** Centros de Custo marcados como favoritos — exibidos na seção "favoriteCostCenters". */
+  favoriteCostCenterIds: string[]
+}

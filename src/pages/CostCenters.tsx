@@ -14,7 +14,7 @@ import { useConfirm } from '../components/ui/Confirm'
 import { useData } from '../context/DataContext'
 import { usePeriod } from '../context/PeriodContext'
 import { formatCurrency, parseCurrencyInput } from '../lib/format'
-import { costCenterSpendInMonth, nextCostCenterColor } from '../lib/aggregations'
+import { costCenterSpendInMonth, costCenterIncomeInMonth, nextCostCenterColor } from '../lib/aggregations'
 import { matchesQuery, normalizeSearchText, transactionSearchFields } from '../lib/textSearch'
 import { Info, Plus, Pencil, Layers } from 'lucide-react'
 import type { CostCenter, Transaction } from '../db/models'
@@ -155,7 +155,13 @@ export default function CostCenters() {
   }
 
   const centerRows = useMemo(
-    () => costCenters.map((cc) => ({ costCenter: cc, spend: costCenterSpendInMonth(transactions, cc.id, period) })),
+    () =>
+      costCenters.map((cc) => ({
+        costCenter: cc,
+        spend: costCenterSpendInMonth(transactions, cc.id, period),
+        // Entradas do centro — exibidas separadamente do gasto no card, nunca somadas a ele.
+        income: costCenterIncomeInMonth(transactions, cc.id, period),
+      })),
     [costCenters, transactions, period],
   )
 
@@ -163,9 +169,10 @@ export default function CostCenters() {
     const q = normalizeSearchText(search)
     if (!q) return centerRows
     return centerRows.filter(
-      ({ costCenter, spend }) =>
+      ({ costCenter, spend, income }) =>
         matchesQuery([costCenter.name, ...costCenter.categories.map((c) => c.name)], search) ||
-        spend.items.some((t) => matchesQuery(transactionSearchFields(t, costCenters, accounts), search)),
+        spend.items.some((t) => matchesQuery(transactionSearchFields(t, costCenters, accounts), search)) ||
+        income.items.some((t) => matchesQuery(transactionSearchFields(t, costCenters, accounts), search)),
     )
   }, [centerRows, search, costCenters, accounts])
 
@@ -226,12 +233,12 @@ export default function CostCenters() {
             </Card>
           ) : (
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
-              {visibleCenterRows.map(({ costCenter: cc, spend }) => (
+              {visibleCenterRows.map(({ costCenter: cc, spend, income }) => (
                 <button
                   key={cc.id}
                   type="button"
                   onClick={() => setOpenCenterId(cc.id)}
-                  className="group flex flex-col gap-4 rounded-2xl border border-[var(--border-hairline)] bg-white p-5 text-left shadow-[0_1px_2px_rgba(42,34,34,0.04)] transition-colors hover:border-rose-200 lg:p-6"
+                  className="card-interactive group flex flex-col gap-4 rounded-xl border border-[var(--border-hairline)] bg-white p-4 text-left shadow-[var(--shadow-card)] transition-colors hover:border-rose-200 lg:p-5"
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
@@ -274,6 +281,11 @@ export default function CostCenters() {
                     <p className="text-[12.5px] text-neutral-500">
                       {spend.count} lançamento{spend.count === 1 ? '' : 's'}
                     </p>
+                    {income.count > 0 && (
+                      <p className="mt-1 text-[12.5px] font-medium text-[var(--color-status-good)]">
+                        + {formatCurrency(income.total)} em entrada{income.count === 1 ? '' : 's'}
+                      </p>
+                    )}
                   </div>
                 </button>
               ))}

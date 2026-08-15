@@ -13,7 +13,7 @@ interface BulkActionBarProps {
 export function BulkActionBar({ count, onClear, children, label = 'selecionado' }: BulkActionBarProps) {
   if (count === 0) return null
   return (
-    <div className="sticky bottom-4 z-30 flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--border-hairline)] bg-white px-4 py-3 shadow-lg">
+    <div className="sticky bottom-4 z-30 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-hairline)] bg-white px-4 py-3 shadow-lg">
       <span className="mr-1 shrink-0 text-[13px] font-semibold text-neutral-800">
         {count} {label}
         {count === 1 ? '' : 's'}

@@ -5,14 +5,14 @@
  * genérica por tipo de movimentação (ex.: nunca "Pix enviado" → Energia).
  */
 import type { ClassificationRule } from '../db/models'
-import { normalizeCounterpartyKey } from './importCounterparty'
+import { ruleKeyFromCounterparty } from './importCounterparty'
 
 /** Procura, entre as regras ativas, a que corresponde à contraparte informada. Correspondência
- * exata pelo padrão normalizado — evita generalizações perigosas (ex.: "MERCADO" casando com
- * qualquer estabelecimento que contenha essa palavra). */
+ * exata pelo padrão normalizado (nunca por data/hora/valor/documento — ver `ruleKeyFromCounterparty`)
+ * — evita generalizações perigosas (ex.: "MERCADO" casando com qualquer estabelecimento que
+ * contenha essa palavra), e reconhece a mesma contraparte em datas/valores diferentes. */
 export function findMatchingRule(counterparty: string | undefined, rules: ClassificationRule[]): ClassificationRule | undefined {
-  if (!counterparty) return undefined
-  const key = normalizeCounterpartyKey(counterparty)
+  const key = ruleKeyFromCounterparty(counterparty)
   if (!key) return undefined
   return rules.find((r) => r.active && r.pattern === key)
 }
@@ -23,8 +23,7 @@ export function groupByNormalizedCounterparty<T>(items: T[], getCounterparty: (i
   const groups = new Map<string, T[]>()
   for (const item of items) {
     const cp = getCounterparty(item)
-    if (!cp) continue
-    const key = normalizeCounterpartyKey(cp)
+    const key = ruleKeyFromCounterparty(cp)
     if (!key) continue
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key)!.push(item)

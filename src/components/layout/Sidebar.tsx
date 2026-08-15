@@ -18,9 +18,9 @@ function NavRow({ item, onClick }: { item: (typeof sidebarItems)[number]; onClic
       end={item.path === '/'}
       className={({ isActive }) =>
         [
-          'group flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-[14.5px] font-medium transition-colors',
+          'group flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-[14.5px] font-medium transition-colors duration-200',
           isActive
-            ? 'bg-rose-100/80 text-rose-900'
+            ? 'bg-rose-700 text-white shadow-sm shadow-rose-900/20'
             : 'text-neutral-700 hover:bg-rose-50 hover:text-rose-800',
         ].join(' ')
       }
@@ -30,7 +30,7 @@ function NavRow({ item, onClick }: { item: (typeof sidebarItems)[number]; onClic
           <Icon
             size={18}
             strokeWidth={2}
-            className={isActive ? 'text-rose-700' : 'text-neutral-400 group-hover:text-rose-500'}
+            className={isActive ? 'text-white' : 'text-neutral-400 group-hover:text-rose-500'}
           />
           <span className="flex-1">{item.label}</span>
           {item.badge ? (

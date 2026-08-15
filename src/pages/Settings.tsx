@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Card } from '../components/ui/Card'
 import { ClassificationRulesModal } from '../components/settings/ClassificationRulesModal'
+import { DashboardPersonalizeModal } from '../components/dashboard/DashboardPersonalizeModal'
 import { useData } from '../context/DataContext'
 import { brand } from '../config/brand'
 import {
@@ -9,6 +10,7 @@ import {
   Layers,
   Zap,
   Landmark,
+  LayoutDashboard,
   SlidersHorizontal,
   DatabaseBackup,
   FileDown,
@@ -28,6 +30,7 @@ const sections = [
   {
     title: 'Sistema',
     items: [
+      { key: 'painel', icon: LayoutDashboard, label: 'Personalizar painel', description: 'Mostre, oculte e reordene as seções do painel inicial.' },
       { key: 'preferencias', icon: SlidersHorizontal, label: 'Preferências', description: 'Aparência, moeda e formato de datas.' },
       { key: 'backup', icon: DatabaseBackup, label: 'Backup', description: 'Cópias de segurança dos seus dados.' },
       { key: 'exportacao', icon: FileDown, label: 'Exportação', description: 'Exporte seus dados em planilha ou PDF.' },
@@ -36,8 +39,23 @@ const sections = [
 ]
 
 export default function Settings() {
-  const { classificationRules, costCenters, updateClassificationRule, deleteClassificationRule } = useData()
+  const {
+    classificationRules,
+    costCenters,
+    updateClassificationRule,
+    deleteClassificationRule,
+    dashboardLayout,
+    updateDashboardLayout,
+    toggleFavoriteCostCenter,
+    resetDashboardLayout,
+  } = useData()
   const [rulesOpen, setRulesOpen] = useState(false)
+  const [personalizeOpen, setPersonalizeOpen] = useState(false)
+
+  const handlers: Record<string, () => void> = {
+    regras: () => setRulesOpen(true),
+    painel: () => setPersonalizeOpen(true),
+  }
 
   return (
     <div className="space-y-6">
@@ -45,7 +63,7 @@ export default function Settings() {
 
       {sections.map((section) => (
         <Card key={section.title} padded={false}>
-          <div className="p-5 pb-3 lg:px-6">
+          <div className="p-4 pb-2 lg:px-5">
             <h2 className="font-display text-[15px] font-semibold text-neutral-900">{section.title}</h2>
           </div>
           <ul className="divide-y divide-[var(--border-hairline)]">
@@ -53,10 +71,10 @@ export default function Settings() {
               <li key={item.label}>
                 <button
                   type="button"
-                  onClick={item.key === 'regras' ? () => setRulesOpen(true) : undefined}
-                  className="flex w-full items-center gap-3.5 px-5 py-4 text-left transition-colors hover:bg-rose-50/50 lg:px-6"
+                  onClick={handlers[item.key]}
+                  className="flex w-full items-center gap-3.5 px-4 py-3.5 text-left transition-colors hover:bg-rose-50/50 lg:px-5"
                 >
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-700">
                     <item.icon size={16} />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -68,7 +86,7 @@ export default function Settings() {
                       {classificationRules.length}
                     </span>
                   )}
-                  {item.key !== 'regras' && (
+                  {item.key !== 'regras' && item.key !== 'painel' && (
                     <span className="shrink-0 rounded-full bg-[var(--color-neutral-100)] px-2.5 py-1 text-[11px] font-medium text-neutral-500">
                       Fase 2
                     </span>
@@ -88,6 +106,16 @@ export default function Settings() {
         costCenters={costCenters}
         onUpdate={updateClassificationRule}
         onDelete={deleteClassificationRule}
+      />
+
+      <DashboardPersonalizeModal
+        open={personalizeOpen}
+        onClose={() => setPersonalizeOpen(false)}
+        layout={dashboardLayout}
+        costCenters={costCenters}
+        onUpdateLayout={updateDashboardLayout}
+        onToggleFavorite={toggleFavoriteCostCenter}
+        onReset={resetDashboardLayout}
       />
     </div>
   )

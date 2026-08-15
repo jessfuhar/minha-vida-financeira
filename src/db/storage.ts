@@ -171,6 +171,30 @@ export function saveSpendingLimits<T>(limits: T): boolean {
   }
 }
 
+// --- Personalização do painel: registro único e pequeno, guardado em localStorage. ---
+
+const DASHBOARD_LAYOUT_KEY = 'mvf:dashboardLayout'
+
+export function loadDashboardLayout<T>(fallback: T): T {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_LAYOUT_KEY)
+    if (!raw) return fallback
+    return { ...fallback, ...JSON.parse(raw) }
+  } catch {
+    return fallback
+  }
+}
+
+export function saveDashboardLayout<T>(layout: T): boolean {
+  try {
+    localStorage.setItem(DASHBOARD_LAYOUT_KEY, JSON.stringify(layout))
+    return true
+  } catch (err) {
+    console.warn('[storage] falha ao salvar personalização do painel em localStorage.', err)
+    return false
+  }
+}
+
 export function generateId(): string {
   try {
     return crypto.randomUUID()

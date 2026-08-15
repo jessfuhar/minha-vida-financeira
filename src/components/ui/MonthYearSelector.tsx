@@ -70,7 +70,7 @@ export function MonthYearSelector({ className = '' }: { className?: string }) {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-50 mt-2 w-[280px] rounded-2xl border border-[var(--border-hairline)] bg-white p-4 shadow-2xl">
+          <div className="absolute left-0 top-full z-50 mt-2 w-[280px] rounded-xl border border-[var(--border-hairline)] bg-white p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-between">
               <button
                 type="button"

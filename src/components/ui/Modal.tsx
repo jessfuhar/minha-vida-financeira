@@ -40,7 +40,7 @@ export function Modal({ open, onClose, title, subtitle, children, footer, width 
       <div className="fixed inset-0 bg-black/30 backdrop-blur-[1px]" onClick={onClose} />
       <div
         className={[
-          'relative w-full rounded-2xl border border-[var(--border-hairline)] bg-white shadow-2xl',
+          'relative w-full rounded-xl border border-[var(--border-hairline)] bg-white shadow-2xl',
           widths[width],
           isXl ? 'flex h-[92vh] max-h-[92vh] flex-col' : '',
         ].join(' ')}

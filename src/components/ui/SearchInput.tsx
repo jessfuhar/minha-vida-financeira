@@ -16,7 +16,7 @@ export function SearchInput({ size = 'md', className = '', ...rest }: SearchInpu
       <input
         type="text"
         className={[
-          'w-full rounded-2xl border border-[var(--border-hairline)] bg-white text-neutral-800 placeholder:text-neutral-400',
+          'w-full rounded-xl border border-[var(--border-hairline)] bg-white text-neutral-800 placeholder:text-neutral-400',
           'focus:border-rose-300 focus:outline-none focus:ring-4 focus:ring-rose-100',
           isLg ? 'py-4 pl-12 pr-4 text-[16px] shadow-sm' : 'py-2.5 pl-10 pr-3 text-[14px]',
           className,
