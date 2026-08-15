@@ -12,23 +12,18 @@ interface BulkClassifyModalProps {
   mode: 'categoria' | 'centroDeCusto'
   count: number
   costCenters: CostCenter[]
-  /** Quando informado, mostra a opção "Salvar como regra" (só faz sentido para lançamentos, que
-   * têm contraparte — contas a pagar não mostram essa opção). */
-  ruleGroupsCount?: number
-  onConfirm: (value: { costCenterId: string | null; categoryId: string | null }, saveAsRule: boolean) => Promise<void>
+  onConfirm: (value: { costCenterId: string | null; categoryId: string | null }) => Promise<void>
 }
 
-export function BulkClassifyModal({ open, onClose, mode, count, costCenters, ruleGroupsCount, onConfirm }: BulkClassifyModalProps) {
+export function BulkClassifyModal({ open, onClose, mode, count, costCenters, onConfirm }: BulkClassifyModalProps) {
   const [costCenterId, setCostCenterId] = useState('')
   const [categoryId, setCategoryId] = useState('')
-  const [saveAsRule, setSaveAsRule] = useState(false)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!open) return
     setCostCenterId('')
     setCategoryId('')
-    setSaveAsRule(false)
   }, [open])
 
   const selectedCostCenter = costCenters.find((c) => c.id === costCenterId)
@@ -37,10 +32,7 @@ export function BulkClassifyModal({ open, onClose, mode, count, costCenters, rul
     if (!costCenterId) return
     setSaving(true)
     try {
-      await onConfirm(
-        { costCenterId, categoryId: mode === 'categoria' ? categoryId || null : null },
-        saveAsRule,
-      )
+      await onConfirm({ costCenterId, categoryId: mode === 'categoria' ? categoryId || null : null })
       onClose()
     } finally {
       setSaving(false)
@@ -87,21 +79,6 @@ export function BulkClassifyModal({ open, onClose, mode, count, costCenters, rul
               ))}
             </Select>
           </Field>
-        )}
-
-        {ruleGroupsCount !== undefined && ruleGroupsCount > 0 && (
-          <label className="flex items-start gap-2.5 rounded-xl bg-[var(--color-neutral-100)] px-3.5 py-3 text-[13px] text-neutral-600">
-            <input
-              type="checkbox"
-              checked={saveAsRule}
-              onChange={(e) => setSaveAsRule(e.target.checked)}
-              className="mt-0.5"
-            />
-            <span>
-              Salvar como regra para movimentações semelhantes ({ruleGroupsCount} contrapart{ruleGroupsCount === 1 ? 'e' : 'es'} identificada
-              {ruleGroupsCount === 1 ? '' : 's'} na seleção). A próxima importação vai sugerir automaticamente essa classificação.
-            </span>
-          </label>
         )}
       </div>
     </Modal>

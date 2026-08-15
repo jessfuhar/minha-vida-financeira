@@ -26,7 +26,7 @@ import { usePeriod } from '../context/PeriodContext'
 import { monthlyCashFlowSeries, dailyCashFlowSeries, monthKey, monthTotals, todayIso } from '../lib/aggregations'
 import { formatCurrency, parseCurrencyInput } from '../lib/format'
 import { useSelection } from '../lib/useSelection'
-import { groupByNormalizedCounterparty } from '../lib/importRules'
+import { buildHistorySuggestionIndex, suggestClassification, type ClassificationSuggestion } from '../lib/importRules'
 import { findTransferCandidates } from '../lib/transferDetection'
 import { detectDuplicates } from '../lib/importDedup'
 import { matchesQuery, transactionSearchFields } from '../lib/textSearch'
@@ -59,7 +59,6 @@ export default function CashFlow() {
     deleteTransferBoth,
     unlinkTransfer,
     linkAsTransfer,
-    saveClassificationRule,
     registerRuleUsage,
     updateAccount,
   } = useData()
@@ -110,10 +109,25 @@ export default function CashFlow() {
     [filteredTransactions, sort.sortKey, sort.sortDir, costCenters],
   )
 
-  const selectedTransactions = useMemo(
-    () => transactions.filter((t) => selection.selected.has(t.id)),
-    [transactions, selection.selected],
-  )
+  // Sugestão (nunca classificação automática) para lançamentos ainda "aguardando classificação":
+  // reaproveita o mesmo motor da importação (regra explícita > histórico consistente da contraparte),
+  // recalculado ao vivo sempre que uma nova regra é aprendida ou o histórico muda.
+  const historySuggestionIndex = useMemo(() => buildHistorySuggestionIndex(transactions), [transactions])
+  const suggestionsById = useMemo(() => {
+    const map = new Map<string, ClassificationSuggestion>()
+    for (const t of sortedTransactions) {
+      if (t.status !== 'aguardando_classificacao') continue
+      const suggestion = suggestClassification(t.counterparty, classificationRules, historySuggestionIndex)
+      if (suggestion) map.set(t.id, suggestion)
+    }
+    return map
+  }, [sortedTransactions, classificationRules, historySuggestionIndex])
+
+  const handleApplySuggestion = async (t: Transaction, suggestion: ClassificationSuggestion) => {
+    await updateTransaction(t.id, { costCenterId: suggestion.costCenterId, categoryId: suggestion.categoryId })
+    if (suggestion.ruleId) registerRuleUsage(suggestion.ruleId)
+    toast.show('Classificação aplicada a partir da sugestão.')
+  }
 
   const openNew = () => {
     setEditing(null)
@@ -192,7 +206,7 @@ export default function CashFlow() {
     setModalOpen(true)
   }
 
-  const handleSubmit = async (values: TransactionFormValues, saveAsRule: boolean) => {
+  const handleSubmit = async (values: TransactionFormValues) => {
     const payload = {
       direction: values.direction,
       kind: values.kind,
@@ -223,11 +237,6 @@ export default function CashFlow() {
     } else {
       await addTransaction(payload)
       toast.show('Lançamento adicionado.')
-    }
-
-    if (saveAsRule && payload.counterparty && payload.costCenterId) {
-      await saveClassificationRule({ counterparty: payload.counterparty, categoryId: payload.categoryId, costCenterId: payload.costCenterId })
-      toast.show('Regra de classificação salva.', 'info')
     }
   }
 
@@ -293,20 +302,10 @@ export default function CashFlow() {
   }
 
   // ---------- Ações em massa ----------
-  const handleBulkClassify = async (value: { costCenterId: string | null; categoryId: string | null }, saveAsRule: boolean) => {
+  const handleBulkClassify = async (value: { costCenterId: string | null; categoryId: string | null }) => {
     const ids = selection.selectedIds
     await bulkUpdateTransactions(ids, value)
     toast.show(`${ids.length} lançamento${ids.length === 1 ? '' : 's'} atualizado${ids.length === 1 ? '' : 's'}.`)
-
-    if (saveAsRule && value.costCenterId) {
-      const groups = groupByNormalizedCounterparty(selectedTransactions, (t) => t.counterparty)
-      for (const group of groups.values()) {
-        const counterparty = group[0].counterparty
-        if (!counterparty) continue
-        await saveClassificationRule({ counterparty, categoryId: value.categoryId, costCenterId: value.costCenterId })
-      }
-      if (groups.size > 0) toast.show(`${groups.size} regra${groups.size === 1 ? '' : 's'} de classificação salva${groups.size === 1 ? '' : 's'}.`, 'info')
-    }
     selection.clear()
   }
 
@@ -492,6 +491,8 @@ export default function CashFlow() {
               sortDir={sort.sortDir}
               onSortChange={sort.onSortChange}
               onToggleAll={selection.toggleAll}
+              suggestions={suggestionsById}
+              onApplySuggestion={handleApplySuggestion}
             />
           )}
         </div>
@@ -562,7 +563,6 @@ export default function CashFlow() {
         mode={bulkModal === 'categoria' ? 'categoria' : 'centroDeCusto'}
         count={selection.selectedCount}
         costCenters={costCenters}
-        ruleGroupsCount={groupByNormalizedCounterparty(selectedTransactions, (t) => t.counterparty).size}
         onConfirm={handleBulkClassify}
       />
 

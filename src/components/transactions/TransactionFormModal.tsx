@@ -8,7 +8,6 @@ import type { Account, CostCenter, Transaction } from '../../db/models'
 import type { TransactionDirection, TransactionKind } from '../../data/types'
 import { todayIso } from '../../lib/aggregations'
 import { isValidCurrencyInput, parseCurrencyInput, formatCurrency } from '../../lib/format'
-import { sanitizeCounterpartyForRule } from '../../lib/importCounterparty'
 
 export interface TransactionFormValues {
   direction: TransactionDirection
@@ -45,7 +44,7 @@ function emptyValues(accounts: Account[]): TransactionFormValues {
 interface TransactionFormModalProps {
   open: boolean
   onClose: () => void
-  onSubmit: (values: TransactionFormValues, saveAsRule: boolean) => Promise<void>
+  onSubmit: (values: TransactionFormValues) => Promise<void>
   onDelete?: () => void
   onUnlinkTransfer?: () => void
   accounts: Account[]
@@ -71,7 +70,6 @@ export function TransactionFormModal({
   const [values, setValues] = useState<TransactionFormValues>(() => emptyValues(accounts))
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
-  const [saveAsRule, setSaveAsRule] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -93,7 +91,6 @@ export function TransactionFormModal({
     } else {
       setValues({ ...emptyValues(accounts), ...initialValues })
     }
-    setSaveAsRule(false)
     setError('')
   }, [open, transaction, accounts, initialValues])
 
@@ -117,7 +114,7 @@ export function TransactionFormModal({
     setError('')
     setSaving(true)
     try {
-      await onSubmit(values, saveAsRule)
+      await onSubmit(values)
       onClose()
     } finally {
       setSaving(false)
@@ -286,24 +283,6 @@ export function TransactionFormModal({
               </Select>
             </Field>
           </div>
-
-          {(() => {
-            // A regra nunca usa data/hora/valor/documento como identidade — mostra só a contraparte
-            // já limpa (ex.: "CARLOS HENR"), nunca o texto bruto do extrato com data/hora/documento.
-            const cleanCounterparty = sanitizeCounterpartyForRule(values.counterparty)
-            if (!cleanCounterparty || !values.costCenterId) return null
-            return (
-              <label className="flex items-start gap-2.5 rounded-lg bg-[var(--color-neutral-100)] px-3.5 py-3 text-[13px] text-neutral-600">
-                <input type="checkbox" checked={saveAsRule} onChange={(e) => setSaveAsRule(e.target.checked)} className="mt-0.5" />
-                <span>
-                  <span className="block font-medium text-neutral-800">Salvar regra para {cleanCounterparty}</span>
-                  <span className="mt-0.5 block text-neutral-500">
-                    Próximas movimentações dessa pessoa ou empresa serão sugeridas automaticamente.
-                  </span>
-                </span>
-              </label>
-            )
-          })()}
 
           <Field label="Observação (opcional)">
             <Textarea

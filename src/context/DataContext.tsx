@@ -29,6 +29,7 @@ import {
 import { accountBalanceNow, totalBalanceNow, monthTotals, monthKey, todayIso, daysUntil } from '../lib/aggregations'
 import { isInternalTransferKind } from '../lib/transactionKind'
 import { normalizeCounterpartyKey, sanitizeCounterpartyForRule } from '../lib/importCounterparty'
+import { groupByNormalizedCounterparty } from '../lib/importRules'
 import { validateTransferPair } from '../lib/transferDetection'
 import { brand } from '../config/brand'
 import type { AttentionAlert } from '../data/types'
@@ -318,6 +319,83 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return created
   }, [])
 
+  // ---------- Regras de classificação aprendidas ----------
+  // Nunca usa data, hora, valor ou documento/identificador variável (FITID etc.) como identidade da
+  // regra — `sanitizeCounterpartyForRule` limpa o texto bruto e `normalizeCounterpartyKey` normaliza
+  // o que sobra (ver lib/importCounterparty.ts). Isso vale tanto para a chave de correspondência
+  // (`pattern`) quanto para o texto exibido nas telas (`label`).
+  const saveClassificationRule = useCallback(
+    async (input: { counterparty: string; categoryId: string | null; costCenterId: string | null }) => {
+      const cleanCounterparty = sanitizeCounterpartyForRule(input.counterparty)
+      if (!cleanCounterparty) return
+      const pattern = normalizeCounterpartyKey(cleanCounterparty)
+      if (!pattern) return
+      const existing = classificationRules.find((r) => r.pattern === pattern)
+      if (existing) {
+        const updated: ClassificationRule = {
+          ...existing,
+          categoryId: input.categoryId,
+          costCenterId: input.costCenterId,
+          active: true,
+          updatedAt: now(),
+        }
+        await putItem('classificationRules', updated)
+        setClassificationRules((prev) => prev.map((r) => (r.id === existing.id ? updated : r)))
+      } else {
+        const rule: ClassificationRule = {
+          id: generateId(),
+          pattern,
+          label: cleanCounterparty,
+          categoryId: input.categoryId,
+          costCenterId: input.costCenterId,
+          active: true,
+          createdAt: now(),
+          updatedAt: now(),
+          useCount: 0,
+        }
+        await putItem('classificationRules', rule)
+        setClassificationRules((prev) => [...prev, rule])
+      }
+    },
+    [classificationRules],
+  )
+
+  const updateClassificationRule = useCallback(
+    async (id: string, patch: Partial<Pick<ClassificationRule, 'categoryId' | 'costCenterId' | 'active' | 'label'>>) => {
+      const existing = classificationRules.find((r) => r.id === id)
+      if (!existing) return
+      const updated: ClassificationRule = { ...existing, ...patch, updatedAt: now() }
+      await putItem('classificationRules', updated)
+      setClassificationRules((prev) => prev.map((r) => (r.id === id ? updated : r)))
+    },
+    [classificationRules],
+  )
+
+  const deleteClassificationRule = useCallback(
+    async (id: string) => {
+      await deleteItem('classificationRules', id)
+      setClassificationRules((prev) => prev.filter((r) => r.id !== id))
+    },
+    [classificationRules],
+  )
+
+  /** Marca que uma regra acabou de ser aplicada (usada na importação) — atualiza contagem de uso
+   * e data da última utilização, sem bloquear a importação em si (fire-and-forget). */
+  const registerRuleUsage = useCallback(
+    (id: string) => {
+      const existing = classificationRules.find((r) => r.id === id)
+      if (!existing) return
+      const updated: ClassificationRule = { ...existing, useCount: existing.useCount + 1, lastUsedAt: now() }
+      setClassificationRules((prev) => prev.map((r) => (r.id === id ? updated : r)))
+      void putItem('classificationRules', updated)
+    },
+    [classificationRules],
+  )
+
+  /** Aprendizado imediato: toda vez que uma classificação manual define um Centro de Custo, a
+   * contraparte (já normalizada) passa a ter regra salva — sem exigir nenhuma ação extra da usuária.
+   * A regra nunca CLASSIFICA sozinha lançamentos existentes: ela só passa a alimentar a sugestão
+   * (`suggestClassification`, ver lib/importRules.ts) que a usuária aplica manualmente. */
   const updateTransaction = useCallback(
     async (id: string, patch: Partial<NewTransaction>) => {
       const existing = transactions.find((t) => t.id === id)
@@ -330,8 +408,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
       }
       await putItem('transactions', updated)
       setTransactions((prev) => prev.map((t) => (t.id === id ? updated : t)))
+      if (patch.costCenterId) {
+        await saveClassificationRule({ counterparty: merged.counterparty ?? '', categoryId: merged.categoryId ?? null, costCenterId: patch.costCenterId })
+      }
     },
-    [transactions],
+    [transactions, saveClassificationRule],
   )
 
   /** Restaura o `kind` original (e desfaz o vínculo) de uma ponta de transferência que ficou
@@ -378,8 +459,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
       await Promise.all(updated.map((u) => putItem('transactions', u)))
       const byId = new Map(updated.map((u) => [u.id, u]))
       setTransactions((prev) => prev.map((t) => byId.get(t.id) ?? t))
+
+      // Mesmo aprendizado imediato de updateTransaction, mas por contraparte distinta dentro do lote
+      // — nunca uma regra só para a primeira transação selecionada.
+      if (patch.costCenterId) {
+        const groups = groupByNormalizedCounterparty(updated, (t) => t.counterparty)
+        for (const group of groups.values()) {
+          const counterparty = group[0].counterparty
+          if (!counterparty) continue
+          await saveClassificationRule({ counterparty, categoryId: patch.categoryId ?? null, costCenterId: patch.costCenterId })
+        }
+      }
     },
-    [transactions],
+    [transactions, saveClassificationRule],
   )
 
   /** Exclusão em massa — também restaura (desvincula) automaticamente qualquer ponta de
@@ -508,79 +600,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
       return { ok: true }
     },
     [transactions],
-  )
-
-  // ---------- Regras de classificação aprendidas ----------
-  // Nunca usa data, hora, valor ou documento/identificador variável (FITID etc.) como identidade da
-  // regra — `sanitizeCounterpartyForRule` limpa o texto bruto e `normalizeCounterpartyKey` normaliza
-  // o que sobra (ver lib/importCounterparty.ts). Isso vale tanto para a chave de correspondência
-  // (`pattern`) quanto para o texto exibido nas telas (`label`).
-  const saveClassificationRule = useCallback(
-    async (input: { counterparty: string; categoryId: string | null; costCenterId: string | null }) => {
-      const cleanCounterparty = sanitizeCounterpartyForRule(input.counterparty)
-      if (!cleanCounterparty) return
-      const pattern = normalizeCounterpartyKey(cleanCounterparty)
-      if (!pattern) return
-      const existing = classificationRules.find((r) => r.pattern === pattern)
-      if (existing) {
-        const updated: ClassificationRule = {
-          ...existing,
-          categoryId: input.categoryId,
-          costCenterId: input.costCenterId,
-          active: true,
-          updatedAt: now(),
-        }
-        await putItem('classificationRules', updated)
-        setClassificationRules((prev) => prev.map((r) => (r.id === existing.id ? updated : r)))
-      } else {
-        const rule: ClassificationRule = {
-          id: generateId(),
-          pattern,
-          label: cleanCounterparty,
-          categoryId: input.categoryId,
-          costCenterId: input.costCenterId,
-          active: true,
-          createdAt: now(),
-          updatedAt: now(),
-          useCount: 0,
-        }
-        await putItem('classificationRules', rule)
-        setClassificationRules((prev) => [...prev, rule])
-      }
-    },
-    [classificationRules],
-  )
-
-  const updateClassificationRule = useCallback(
-    async (id: string, patch: Partial<Pick<ClassificationRule, 'categoryId' | 'costCenterId' | 'active' | 'label'>>) => {
-      const existing = classificationRules.find((r) => r.id === id)
-      if (!existing) return
-      const updated: ClassificationRule = { ...existing, ...patch, updatedAt: now() }
-      await putItem('classificationRules', updated)
-      setClassificationRules((prev) => prev.map((r) => (r.id === id ? updated : r)))
-    },
-    [classificationRules],
-  )
-
-  const deleteClassificationRule = useCallback(
-    async (id: string) => {
-      await deleteItem('classificationRules', id)
-      setClassificationRules((prev) => prev.filter((r) => r.id !== id))
-    },
-    [classificationRules],
-  )
-
-  /** Marca que uma regra acabou de ser aplicada (usada na importação) — atualiza contagem de uso
-   * e data da última utilização, sem bloquear a importação em si (fire-and-forget). */
-  const registerRuleUsage = useCallback(
-    (id: string) => {
-      const existing = classificationRules.find((r) => r.id === id)
-      if (!existing) return
-      const updated: ClassificationRule = { ...existing, useCount: existing.useCount + 1, lastUsedAt: now() }
-      setClassificationRules((prev) => prev.map((r) => (r.id === id ? updated : r)))
-      void putItem('classificationRules', updated)
-    },
-    [classificationRules],
   )
 
   // ---------- Cost centers & categories ----------

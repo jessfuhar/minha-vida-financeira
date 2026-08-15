@@ -32,7 +32,6 @@ export default function CostCenters() {
     deleteCategory,
     updateTransaction,
     deleteTransaction,
-    saveClassificationRule,
   } = useData()
   const { period, label: periodLabel } = usePeriod()
   const toast = useToast()
@@ -118,7 +117,7 @@ export default function CostCenters() {
     setTxModalOpen(true)
   }
 
-  const handleTxSubmit = async (values: TransactionFormValues, saveAsRule: boolean) => {
+  const handleTxSubmit = async (values: TransactionFormValues) => {
     if (!editingTx) return
     const payload = {
       direction: values.direction,
@@ -136,10 +135,6 @@ export default function CostCenters() {
     }
     await updateTransaction(editingTx.id, payload)
     toast.show('Lançamento atualizado.')
-    if (saveAsRule && payload.counterparty && payload.costCenterId) {
-      await saveClassificationRule({ counterparty: payload.counterparty, categoryId: payload.categoryId, costCenterId: payload.costCenterId })
-      toast.show('Regra de classificação salva.', 'info')
-    }
   }
 
   const handleDeleteTransaction = async (t: Transaction) => {

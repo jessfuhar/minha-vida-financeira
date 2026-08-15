@@ -50,7 +50,7 @@ export function ClassificationRulesModal({ open, onClose, rules, costCenters, on
         <EmptyState
           icon={Zap}
           title="Nenhuma regra ainda"
-          description='Ao classificar uma movimentação com contraparte identificada (ex.: "COPEL DISTRIBUICAO S.A."), você pode salvar como regra — ela passa a aparecer aqui.'
+          description='Toda vez que você classifica manualmente uma movimentação com contraparte identificada (ex.: "COPEL DISTRIBUICAO S.A.") com Centro de Custo, uma regra é aprendida automaticamente e passa a aparecer aqui.'
         />
       ) : (
         <ul className="divide-y divide-[var(--border-hairline)]">

@@ -1,10 +1,11 @@
-import { Pencil, Trash2, ArrowLeftRight, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react'
+import { Pencil, Trash2, ArrowLeftRight, ArrowUp, ArrowDown, ArrowUpDown, Sparkles } from 'lucide-react'
 import type { Transaction, CostCenter } from '../../db/models'
 import { formatCurrencySigned, formatDate } from '../../lib/format'
 import { TransactionTypeBadge } from './TransactionTypeBadge'
 import { TransactionStatusPill } from '../ui/StatusPill'
 import { transactionKindMeta } from '../../lib/transactionKind'
 import type { TransactionSortKey, SortDir } from '../../lib/sorting'
+import type { ClassificationSuggestion } from '../../lib/importRules'
 
 interface TransactionsTableProps {
   transactions: Transaction[]
@@ -25,6 +26,11 @@ interface TransactionsTableProps {
   sortKey?: TransactionSortKey
   sortDir?: SortDir
   onSortChange?: (key: TransactionSortKey) => void
+  /** Sugestão de Centro de Custo/Categoria por id de lançamento (aprendida a partir de classificações
+   * manuais anteriores da mesma contraparte) — nunca aplicada sozinha, só exibida até a usuária clicar
+   * em "Aplicar" (`onApplySuggestion`). */
+  suggestions?: Map<string, ClassificationSuggestion>
+  onApplySuggestion?: (t: Transaction, suggestion: ClassificationSuggestion) => void
 }
 
 function SortableHeader({
@@ -95,6 +101,8 @@ export function TransactionsTable({
   sortKey,
   sortDir,
   onSortChange,
+  suggestions,
+  onApplySuggestion,
 }: TransactionsTableProps) {
   if (transactions.length === 0) {
     return <p className="py-10 text-center text-[14px] text-neutral-500">{emptyMessage}</p>
@@ -151,7 +159,9 @@ export function TransactionsTable({
           </tr>
         </thead>
         <tbody>
-          {transactions.map((t) => (
+          {transactions.map((t) => {
+            const suggestion = suggestions?.get(t.id)
+            return (
             <tr key={t.id} className="border-t border-[var(--border-hairline)] text-[13.5px]">
               {selectable && (
                 <td className="py-3 pr-2">
@@ -234,8 +244,41 @@ export function TransactionsTable({
               >
                 {formatCurrencySigned(t.amount, t.direction)}
               </td>
-              <td className="whitespace-nowrap py-3 pr-4 text-neutral-600">{resolveCostCenterName(costCenters, t.costCenterId)}</td>
-              <td className="whitespace-nowrap py-3 pr-4 text-neutral-600">{resolveCategoryName(costCenters, t.costCenterId, t.categoryId)}</td>
+              <td className="whitespace-nowrap py-3 pr-4 text-neutral-600">
+                {t.costCenterId ? (
+                  resolveCostCenterName(costCenters, t.costCenterId)
+                ) : suggestion ? (
+                  <span
+                    className="inline-flex flex-wrap items-center gap-1 text-[12px] font-medium"
+                    style={{ color: 'var(--color-status-good)' }}
+                    title={
+                      suggestion.source === 'rule'
+                        ? 'Sugerido a partir de uma regra de classificação aprendida'
+                        : 'Sugerido a partir do histórico de classificações anteriores desta contraparte'
+                    }
+                  >
+                    <Sparkles size={11} /> {resolveCostCenterName(costCenters, suggestion.costCenterId)}
+                    {onApplySuggestion && (
+                      <button
+                        type="button"
+                        onClick={() => onApplySuggestion(t, suggestion)}
+                        className="rounded-full px-1.5 py-0.5 underline decoration-dotted hover:text-rose-700"
+                      >
+                        Aplicar
+                      </button>
+                    )}
+                  </span>
+                ) : (
+                  '—'
+                )}
+              </td>
+              <td className="whitespace-nowrap py-3 pr-4 text-neutral-600">
+                {t.costCenterId
+                  ? resolveCategoryName(costCenters, t.costCenterId, t.categoryId)
+                  : suggestion
+                    ? resolveCategoryName(costCenters, suggestion.costCenterId, suggestion.categoryId)
+                    : '—'}
+              </td>
               <td className="py-3">
                 <TransactionStatusPill status={t.status} />
               </td>
@@ -266,7 +309,8 @@ export function TransactionsTable({
                 </td>
               )}
             </tr>
-          ))}
+            )
+          })}
         </tbody>
       </table>
     </div>

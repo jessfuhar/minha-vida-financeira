@@ -36,7 +36,6 @@ export default function Dashboard() {
     deleteAccount,
     updateTransaction,
     deleteTransaction,
-    saveClassificationRule,
     spendingLimits,
     dashboardLayout,
     updateDashboardLayout,
@@ -119,7 +118,7 @@ export default function Dashboard() {
     setTxModalOpen(true)
   }
 
-  const handleTxSubmit = async (values: TransactionFormValues, saveAsRule: boolean) => {
+  const handleTxSubmit = async (values: TransactionFormValues) => {
     if (!editingTx) return
     const payload = {
       direction: values.direction,
@@ -137,10 +136,6 @@ export default function Dashboard() {
     }
     await updateTransaction(editingTx.id, payload)
     toast.show('Lançamento atualizado.')
-    if (saveAsRule && payload.counterparty && payload.costCenterId) {
-      await saveClassificationRule({ counterparty: payload.counterparty, categoryId: payload.categoryId, costCenterId: payload.costCenterId })
-      toast.show('Regra de classificação salva.', 'info')
-    }
   }
 
   const handleDeleteTransaction = async (t: Transaction) => {
