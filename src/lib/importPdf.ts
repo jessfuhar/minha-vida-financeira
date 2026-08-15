@@ -74,17 +74,27 @@ function groupItemsIntoLines(items: RawTextItem[]): string[] {
     .filter((line) => line.length > 0)
 }
 
-async function extractLinesFromPdf(file: File): Promise<string[]> {
+/** Uma linha extraída do PDF junto da página (1-based) onde apareceu — usada só para preservar
+ * contexto em possíveis movimentações não reconhecidas ("Precisa de revisão"); o parser do Banco do
+ * Brasil continua tratando as linhas como texto simples, sem depender da página. */
+interface PdfLine {
+  text: string
+  page: number
+}
+
+async function extractLinesFromPdf(file: File): Promise<PdfLine[]> {
   const buffer = await file.arrayBuffer()
   const loadingTask = getDocument({ data: buffer })
   const pdf = await loadingTask.promise
-  const allLines: string[] = []
+  const allLines: PdfLine[] = []
   try {
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       const page = await pdf.getPage(pageNum)
       const content = await page.getTextContent()
       const items = (content.items as unknown[]).filter(isTextItem)
-      allLines.push(...groupItemsIntoLines(items))
+      for (const text of groupItemsIntoLines(items)) {
+        allLines.push({ text, page: pageNum })
+      }
     }
   } finally {
     await loadingTask.destroy()
@@ -271,7 +281,7 @@ function extractCounterpartyGuess(clusterLines: string[]): string | undefined {
 /** Monta um card de "possível movimentação" com o máximo de contexto que pudermos identificar com
  * segurança a partir de um grupo de linhas órfãs adjacentes — nunca inventa data, valor ou
  * contraparte: quando não dá para determinar algo com segurança, o campo fica `undefined`/`null`. */
-function buildCandidateFromCluster(clusterLines: string[], fallbackYear: string | null): PdfUnrecognizedCandidate {
+function buildCandidateFromCluster(clusterLines: string[], fallbackYear: string | null, page?: number): PdfUnrecognizedCandidate {
   const combined = clusterLines.join(' / ')
 
   const dateMatch = combined.match(/\d{2}\/\d{2}(?:\/\d{2,4})?/)
@@ -299,6 +309,7 @@ function buildCandidateFromCluster(clusterLines: string[], fallbackYear: string 
     probableDirection,
     probableCounterparty,
     probableDocument,
+    page,
   }
 }
 
@@ -317,6 +328,7 @@ interface PendingTransaction {
 interface OrphanEntry {
   text: string
   seq: number
+  page: number
 }
 
 interface PdfParseResult {
@@ -325,11 +337,11 @@ interface PdfParseResult {
   previousBalance?: { amount: number; asOfDate: string | null }
 }
 
-function parsePdfLines(lines: string[]): PdfParseResult {
+function parsePdfLines(lines: PdfLine[]): PdfParseResult {
   const rows: ParsedStatementRow[] = []
   const orphanEntries: OrphanEntry[] = []
   let previousBalance: { amount: number; asOfDate: string | null } | undefined
-  const fallbackYear = findFallbackYear(lines)
+  const fallbackYear = findFallbackYear(lines.map((l) => l.text))
 
   let pending: PendingTransaction | null = null
   let seq = 0
@@ -354,8 +366,8 @@ function parsePdfLines(lines: string[]): PdfParseResult {
     pending = null
   }
 
-  for (const rawLine of lines) {
-    const line = rawLine.trim()
+  for (const { text: rawLineText, page } of lines) {
+    const line = rawLineText.trim()
     seq++
     if (!line) continue
 
@@ -411,7 +423,7 @@ function parsePdfLines(lines: string[]): PdfParseResult {
     if (pending) {
       pending.continuationParts.push(line)
     } else {
-      orphanEntries.push({ text: line, seq })
+      orphanEntries.push({ text: line, seq, page })
     }
   }
   flushPending()
@@ -423,34 +435,399 @@ function parsePdfLines(lines: string[]): PdfParseResult {
 
   // Agrupa linhas órfãs fisicamente adjacentes (sem nenhuma outra linha, cabeçalho ou movimentação,
   // entre elas) num único card de contexto — em vez de mostrar cada fragmento solto isoladamente.
-  const clusters: string[][] = []
+  const clusters: { lines: string[]; page: number }[] = []
   let previousSeq: number | null = null
   for (const entry of orphanEntries) {
     const last = clusters[clusters.length - 1]
     if (last && previousSeq !== null && entry.seq - previousSeq === 1) {
-      last.push(entry.text)
+      last.lines.push(entry.text)
     } else {
-      clusters.push([entry.text])
+      clusters.push({ lines: [entry.text], page: entry.page })
     }
     previousSeq = entry.seq
   }
 
   const unrecognizedCandidates: PdfUnrecognizedCandidate[] = []
   for (const cluster of clusters) {
-    const combinedNormalized = normalize(cluster.join(' ')).trim()
+    const combinedNormalized = normalize(cluster.lines.join(' ')).trim()
     const isDuplicateOfRecognized = combinedNormalized.length >= 6 && consumedTexts.some((ct) => ct.includes(combinedNormalized))
     if (isDuplicateOfRecognized) continue
-    unrecognizedCandidates.push(buildCandidateFromCluster(cluster, fallbackYear))
+    unrecognizedCandidates.push(buildCandidateFromCluster(cluster.lines, fallbackYear, cluster.page))
   }
 
   return { rows, unrecognizedCandidates, previousBalance }
 }
 
+// ---------- detecção do banco pelo conteúdo (nunca pelo nome do arquivo) ----------
+
+/** Cada banco tem marcadores textuais bem distintos que não aparecem nos outros formatos suportados
+ * (Banco do Brasil, Nubank, Neon). Quando nenhum marcador específico é encontrado, cai no parser
+ * padrão (Banco do Brasil e formatos semelhantes), preservando o comportamento já existente. */
+function detectPdfBank(lines: PdfLine[]): 'nubank' | 'neon' | 'bb' {
+  const hasAny = (patterns: RegExp[]) => lines.some(({ text }) => patterns.some((re) => re.test(text)))
+
+  if (hasAny([/Neon Pagamentos S\/A/i, /^Conta digital\b/i, /Descri[cç][ãa]o Data Hora Valor Saldo Cart[ãa]o/i])) {
+    return 'neon'
+  }
+  if (
+    hasAny([
+      /\bNU PAGAMENTOS\b/i,
+      /Nu Financeira/i,
+      /^Movimenta[cç][oõ]es\s*$/i,
+      /Total de entradas/i,
+      /Total de sa[ií]das/i,
+      /Extrato gerado dia/i,
+    ])
+  ) {
+    return 'nubank'
+  }
+  return 'bb'
+}
+
+// ---------- Nubank (extrato por blocos diários, não tabular) ----------
+
+const NUBANK_DATE_TOTAL_RE = /^(\d{2})\s+([A-ZÇ]{3})\s+(\d{4})\s+Total de (entradas|sa[ií]das)\s*[+-]?\s*(-?\d{1,3}(?:\.\d{3})*,\d{2})\s*$/i
+const NUBANK_DATE_ONLY_RE = /^(\d{2})\s+([A-ZÇ]{3})\s+(\d{4})\s*$/i
+const NUBANK_TOTAL_ONLY_RE = /^Total de (entradas|sa[ií]das)\s*[+-]?\s*(-?\d{1,3}(?:\.\d{3})*,\d{2})\s*$/i
+const NUBANK_SALDO_DIA_RE = /^Saldo do dia\b/i
+const NUBANK_TRAILING_VALUE_RE = /(-?\d{1,3}(?:\.\d{3})*,\d{2})\s*$/
+const NUBANK_KNOWN_PREFIX_RE = /^(Transferência recebida|Transferência Recebida|Transferência enviada|Transferência Enviada|Dep[oó]sito recebido)\b/i
+
+/** Cabeçalho/rodapé que se repete em toda página do extrato Nubank — nunca vira lançamento nem
+ * "Precisa de revisão", mesmo quando termina em algo parecido com um valor (ex.: "Saldo inicial
+ * 0,00"). Os identificadores de cliente/CNPJ/conta nunca são hardcoded por nome — só pelo formato. */
+const NUBANK_NOISE_RES: RegExp[] = [
+  /^CNPJ\b/i,
+  /VALORES EM R\$\s*$/i,
+  /^Saldo inicial\b/i,
+  /^Rendimento líquido\b/i,
+  /^Saldo final do per[ií]odo\b/i,
+  /^R\$\s*[\d.,]+\s*$/,
+  /^Tem alguma d[uú]vida/i,
+  /^metropolitanas\)/i,
+  /^Caso a solu[cç][ãa]o fornecida/i,
+  /dispon[ií]veis em nubank\.com\.br/i,
+  /^Extrato gerado dia/i,
+  /^O saldo l[ií]quido corresponde/i,
+  /^N[ãa]o nos responsabilizamos/i,
+  /^Asseguramos a autenticidade/i,
+  /^Nu Financeira S\.A\./i,
+  /^Nu Pagamentos S\.A\./i,
+  /^e Investimento\s*$/i,
+  // cabeçalho "<identificador> <NOME EM MAIÚSCULAS>" repetido em toda página — nunca pelo nome real
+  /^\d{2}\.\d{3}\.\d{3}\s+[A-ZÀ-Ü]/,
+  // número de conta solto (ex.: "636167344-0") que sobra da quebra do cabeçalho entre páginas
+  /^\d{6,}-\d$/,
+]
+
+/** Extrai a contraparte de uma movimentação Nubank a partir do texto completo (já com as linhas de
+ * continuação juntadas) — sempre o nome que segue um dos prefixos conhecidos, cortando antes do
+ * CPF/CNPJ mascarado e do banco de origem/destino (nunca usa data, hora, valor ou esses dados como
+ * contraparte). */
+function extractNubankCounterparty(fullText: string): string | undefined {
+  const prefixes = [
+    /^Transferência recebida pelo Pix\s+/i,
+    /^Transferência Recebida\s+/i,
+    /^Transferência enviada pelo Pix\s+/i,
+    /^Transferência Enviada\s+/i,
+    /^Dep[oó]sito recebido\s+/i,
+  ]
+  for (const prefix of prefixes) {
+    if (prefix.test(fullText)) {
+      const rest = fullText.replace(prefix, '')
+      const dashIdx = rest.indexOf(' - ')
+      const name = (dashIdx >= 0 ? rest.slice(0, dashIdx) : rest).trim()
+      return name || undefined
+    }
+  }
+  return undefined
+}
+
+function nubankTypeLabel(fullText: string): string {
+  if (/^Transferência recebida pelo Pix/i.test(fullText) || /^Transferência Recebida/i.test(fullText)) return 'Transferência recebida'
+  if (/^Transferência enviada pelo Pix/i.test(fullText) || /^Transferência Enviada/i.test(fullText)) return 'Transferência enviada'
+  if (/^Dep[oó]sito recebido/i.test(fullText)) return 'Depósito recebido'
+  return fullText.slice(0, 60).trim() || 'Movimentação'
+}
+
+interface NubankPending {
+  date: string | null
+  direction: 'entrada' | 'saida' | null
+  amount: number | null
+  descParts: string[]
+  page: number
+}
+
+/**
+ * Extrato Nubank: estrutura por blocos diários (ex.: "14 MAR 2026 Total de entradas + 2.225,00"),
+ * nunca uma tabela. O valor de "Total de entradas"/"Total de saídas" é só um RESUMO do dia/bloco —
+ * nunca vira Transaction sozinho. Cada movimentação individual pode ocupar várias linhas
+ * (descrição multilinha), mas seu valor sempre aparece ao final da PRIMEIRA linha da movimentação —
+ * as linhas seguintes (sem valor) são continuação da mesma movimentação, até a próxima linha com
+ * valor, "Saldo do dia", um novo "Total de..." ou uma nova data encerrar o bloco.
+ */
+function parseNubankLines(lines: PdfLine[]): PdfParseResult {
+  const rows: ParsedStatementRow[] = []
+  const unrecognizedCandidates: PdfUnrecognizedCandidate[] = []
+
+  let inMovimentacoes = false
+  let currentDate: string | null = null
+  let currentDirection: 'entrada' | 'saida' | null = null
+  let pending: NubankPending | null = null
+
+  const flushPending = () => {
+    if (!pending) return
+    if (pending.amount != null) {
+      const fullText = pending.descParts.join(' ').replace(/\s+/g, ' ').trim()
+      rows.push({
+        index: rows.length,
+        date: pending.date,
+        description: fullText,
+        friendlyDescription: nubankTypeLabel(fullText),
+        counterparty: extractNubankCounterparty(fullText),
+        amount: pending.amount,
+        direction: pending.direction,
+        rawFields: { linha: pending.descParts[0] ?? '' },
+      })
+    } else {
+      // Prefixo de movimentação reconhecido, mas sem valor localizável com segurança nesta linha —
+      // nunca inventa o valor: manda para revisão manual, preservando página, data e direção já
+      // conhecidas (ver "Linhas não reconhecidas" nos requisitos).
+      unrecognizedCandidates.push({
+        contextLines: pending.descParts,
+        typeLabel: nubankTypeLabel(pending.descParts.join(' ')),
+        probableDate: pending.date,
+        probableAmount: null,
+        probableDirection: pending.direction,
+        page: pending.page,
+        reason: 'Não foi possível identificar o valor desta movimentação.',
+      })
+    }
+    pending = null
+  }
+
+  for (const { text: rawLineText, page } of lines) {
+    const line = rawLineText.trim()
+    if (!line) continue
+
+    if (!inMovimentacoes) {
+      if (/^Movimenta[cç][oõ]es\s*$/i.test(line)) inMovimentacoes = true
+      continue
+    }
+    if (NUBANK_NOISE_RES.some((re) => re.test(line))) continue
+
+    let m = line.match(NUBANK_DATE_TOTAL_RE)
+    if (m) {
+      flushPending()
+      const [, dd, mon, yyyy, dir] = m
+      const monthNum = MONTH_MAP[normalize(mon).slice(0, 3)]
+      currentDate = monthNum ? `${yyyy}-${monthNum}-${dd}` : null
+      currentDirection = /entrada/i.test(dir) ? 'entrada' : 'saida'
+      continue
+    }
+    m = line.match(NUBANK_DATE_ONLY_RE)
+    if (m) {
+      // Data sozinha, sem o "Total de..." na mesma linha — acontece quando a quebra de página corta
+      // o bloco logo depois da data; o total/direção reais vêm a seguir (com ou sem repetir a data).
+      flushPending()
+      const [, dd, mon, yyyy] = m
+      const monthNum = MONTH_MAP[normalize(mon).slice(0, 3)]
+      currentDate = monthNum ? `${yyyy}-${monthNum}-${dd}` : null
+      continue
+    }
+    m = line.match(NUBANK_TOTAL_ONLY_RE)
+    if (m) {
+      // "Total de entradas/saídas" sem data na mesma linha — continua valendo a última data vista
+      // (mesmo bloco/dia, ou continuação após quebra de página).
+      flushPending()
+      currentDirection = /entrada/i.test(m[1]) ? 'entrada' : 'saida'
+      continue
+    }
+    if (NUBANK_SALDO_DIA_RE.test(line)) {
+      flushPending()
+      continue
+    }
+
+    const valueMatch = line.match(NUBANK_TRAILING_VALUE_RE)
+    if (valueMatch) {
+      flushPending()
+      const amount = Math.abs(parseCurrencyInput(valueMatch[1]))
+      const descPart = line.slice(0, valueMatch.index).trim()
+      pending = {
+        date: currentDate,
+        direction: currentDirection,
+        amount: Number.isNaN(amount) ? null : amount,
+        descParts: [descPart],
+        page,
+      }
+      continue
+    }
+
+    if (pending) {
+      pending.descParts.push(line)
+    } else if (NUBANK_KNOWN_PREFIX_RE.test(line)) {
+      pending = { date: currentDate, direction: currentDirection, amount: null, descParts: [line], page }
+    } else {
+      // Linha fora de qualquer bloco reconhecido — nunca descartada silenciosamente.
+      unrecognizedCandidates.push({
+        contextLines: [line],
+        probableDate: currentDate,
+        probableAmount: null,
+        probableDirection: currentDirection,
+        page,
+        reason: 'Linha fora de um bloco de movimentação reconhecido.',
+      })
+    }
+  }
+  flushPending()
+
+  return { rows, unrecognizedCandidates }
+}
+
+// ---------- Neon (extrato tabular) ----------
+
+const NEON_NOISE_RES: RegExp[] = [
+  /^Conta digital\b/i,
+  /^Neon Pagamentos S\/A\b/i,
+  /^Extrato por\s*$/i,
+  /^Ano Base:/i,
+  /^Per[ií]odo de \d/i,
+  /^Chat do App/i,
+  /^\d{1,2} horas por dia/i,
+  /^\/timeneon/i,
+  /^Fale com a gente/i,
+  /^WhatsApp Ouvidoria/i,
+]
+
+const NEON_ROW_RE = /^(.*?)\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}):(\d{2})\s+(-?)\s*R\$\s*([\d.,]+)\s+R\$\s*([\d.,]+)(?:\s*-)?\s*$/
+
+/** Normaliza os caracteres corrompidos que o pdf.js extrai deste extrato Neon: o glifo de dois-pontos
+ * da hora e o sinal de menos antes do valor da movimentação viram, os dois, o caractere nulo
+ * (U+0000) — nunca aparecem como texto legível ("19￾06" em vez de "19:06", "￾R$ 38,90" em vez de
+ * "-R$ 38,90"). Reconstrói ":" entre os dois grupos da hora, e "-" só quando o nulo antecede
+ * diretamente "R$" do VALOR da movimentação — o saldo nunca tem esse sinal. */
+// Construído via String.fromCharCode (nunca um escape de unicode cru no código-fonte) para o caractere
+// nulo nunca acabar virando um byte de controle bruto dentro do arquivo .ts.
+const NUL_CHAR = String.fromCharCode(0)
+const NEON_NUL_BEFORE_RS_RE = new RegExp(NUL_CHAR + String.raw`(?=\s*R\$)`, 'g')
+const NEON_NUL_BETWEEN_DIGITS_RE = new RegExp(String.raw`(\d{2})` + NUL_CHAR + String.raw`(\d{2})`, 'g')
+const NEON_STRAY_NUL_RE = new RegExp(NUL_CHAR, 'g')
+
+function normalizeNeonLine(rawLine: string): string {
+  return rawLine
+    .replace(NEON_NUL_BEFORE_RS_RE, '-')
+    .replace(NEON_NUL_BETWEEN_DIGITS_RE, '$1:$2')
+    .replace(NEON_STRAY_NUL_RE, '')
+}
+
+/** Contraparte Neon: para Pix, o nome já vem isolado depois de "de "/"para "/"crédito "/"débito "
+ * (nunca usa data, hora, valor ou saldo como contraparte); para estornos, o estabelecimento
+ * estornado; para compras/tarifas/faturas sem esses prefixos, a própria descrição já serve como
+ * contraparte normalizada (ex.: "UBER PENDING SAO PAULO BR"). */
+function extractNeonCounterparty(description: string): string | undefined {
+  const prefixes: RegExp[] = [
+    /^PIX recebido de\s+/i,
+    /^PIX enviado para\s+/i,
+    /^Pix cr[eé]dito\s+/i,
+    /^Pix d[eé]bito\s+/i,
+    /^Estorno de\s+/i,
+  ]
+  for (const prefix of prefixes) {
+    if (prefix.test(description)) {
+      const name = description.replace(prefix, '').trim()
+      return name || undefined
+    }
+  }
+  return description.trim() || undefined
+}
+
+/** Descrição curta Neon: para Pix/estorno, só o tipo (ex.: "PIX recebido"), separado da contraparte
+ * — nunca repete o nome já extraído por `extractNeonCounterparty`. Para compras/tarifas/faturas sem
+ * um prefixo reconhecido, o próprio texto já é curto o bastante (ex.: "UBER PENDING SAO PAULO BR"). */
+function neonFriendlyLabel(description: string): string {
+  if (/^PIX recebido de\s+/i.test(description)) return 'PIX recebido'
+  if (/^PIX enviado para\s+/i.test(description)) return 'PIX enviado'
+  if (/^Pix cr[eé]dito\s+/i.test(description)) return 'Pix crédito'
+  if (/^Pix d[eé]bito\s+/i.test(description)) return 'Pix débito'
+  if (/^Estorno de\s+/i.test(description)) return 'Estorno'
+  return description
+}
+
+/** Extrato Neon: uma linha por movimentação ("Descrição Data Hora Valor Saldo Cartão"), nunca
+ * multilinha. Nunca confunde o valor da movimentação com o saldo (sempre a primeira ocorrência de
+ * "R$" depois da hora, nunca a segunda). */
+function parseNeonLines(lines: PdfLine[]): PdfParseResult {
+  const rows: ParsedStatementRow[] = []
+  const unrecognizedCandidates: PdfUnrecognizedCandidate[] = []
+
+  let sawColumnHeader = false
+  let skipNextLine = false
+
+  for (const { text: rawLineText, page } of lines) {
+    const trimmed = rawLineText.trim()
+    if (!trimmed) continue
+    const line = normalizeNeonLine(trimmed)
+
+    // Logo depois do rótulo "período Cliente Agência bancária Conta" vem uma linha só com os dados
+    // da cliente (nome/agência/conta) — nunca uma movimentação; pulada pela posição, nunca pelo nome.
+    if (/^per[ií]odo Cliente/i.test(line)) {
+      skipNextLine = true
+      continue
+    }
+    if (skipNextLine) {
+      skipNextLine = false
+      continue
+    }
+    if (/^Descri[cç][ãa]o Data Hora Valor Saldo Cart[ãa]o/i.test(line)) {
+      sawColumnHeader = true
+      continue
+    }
+    if (!sawColumnHeader) continue
+    if (NEON_NOISE_RES.some((re) => re.test(line))) continue
+    // Linha solta de continuação do nome da cliente (sobrenome que quebrou linha): só maiúsculas,
+    // sem dígito nenhum, poucas palavras — nunca uma movimentação real.
+    if (/^[A-ZÀ-Ü\s]+$/.test(line) && !/\d/.test(line) && line.split(' ').length <= 4) continue
+
+    const m = line.match(NEON_ROW_RE)
+    if (!m) {
+      unrecognizedCandidates.push({
+        contextLines: [trimmed],
+        probableDate: null,
+        probableAmount: null,
+        probableDirection: null,
+        page,
+        reason: 'Linha não corresponde ao formato de movimentação Neon esperado.',
+      })
+      continue
+    }
+
+    const [, descRaw, dateBr, , , sign, valStr] = m
+    const [dd, mo, yyyy] = dateBr.split('/')
+    const description = descRaw.trim()
+    const amount = Math.abs(parseCurrencyInput(valStr))
+
+    rows.push({
+      index: rows.length,
+      date: `${yyyy}-${mo}-${dd}`,
+      description,
+      friendlyDescription: neonFriendlyLabel(description),
+      counterparty: extractNeonCounterparty(description),
+      amount: Number.isNaN(amount) ? null : amount,
+      direction: sign === '-' ? 'saida' : 'entrada',
+      rawFields: { linha: trimmed },
+    })
+  }
+
+  return { rows, unrecognizedCandidates }
+}
+
 /** Ponto de entrada: lê um arquivo PDF de extrato e devolve um `ParsedStatement` no mesmo formato
  * usado pelos demais parsers. Nunca lança para o chamador — erros são devolvidos no campo
- * `error`, para a tela de importação mostrar uma mensagem clara em vez de quebrar. */
+ * `error`, para a tela de importação mostrar uma mensagem clara em vez de quebrar. Detecta o banco
+ * pelo CONTEÚDO extraído (nunca pelo nome do arquivo) e escolhe o parser adequado — Banco do Brasil
+ * continua sendo o padrão quando nenhum marcador específico de Nubank/Neon é encontrado. */
 export async function parsePdf(file: File): Promise<ParsedStatement> {
-  let lines: string[]
+  let lines: PdfLine[]
   try {
     lines = await extractLinesFromPdf(file)
   } catch (err) {
@@ -472,7 +849,9 @@ export async function parsePdf(file: File): Promise<ParsedStatement> {
     }
   }
 
-  const { rows, unrecognizedCandidates, previousBalance } = parsePdfLines(lines)
+  const bank = detectPdfBank(lines)
+  const { rows, unrecognizedCandidates, previousBalance } =
+    bank === 'nubank' ? parseNubankLines(lines) : bank === 'neon' ? parseNeonLines(lines) : parsePdfLines(lines)
 
   if (rows.length === 0 && unrecognizedCandidates.length === 0) {
     return {

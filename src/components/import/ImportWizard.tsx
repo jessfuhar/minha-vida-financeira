@@ -706,7 +706,9 @@ export function ImportWizard({
                               <p><span className="text-neutral-400">Entrada/Saída: </span>{c.probableDirection === 'entrada' ? 'Entrada' : c.probableDirection === 'saida' ? 'Saída' : 'Não identificado'}</p>
                               <p><span className="text-neutral-400">Contraparte provável: </span>{c.probableCounterparty ?? 'Não identificado'}</p>
                               <p><span className="text-neutral-400">Documento: </span>{c.probableDocument ?? 'Não identificado'}</p>
+                              {c.page !== undefined && <p><span className="text-neutral-400">Página: </span>{c.page}</p>}
                               <p className="col-span-2 sm:col-span-3"><span className="text-neutral-400">Arquivo de origem: </span>{entry.sourceFile}</p>
+                              {c.reason && <p className="col-span-2 sm:col-span-3"><span className="text-neutral-400">Motivo: </span>{c.reason}</p>}
                             </div>
                             <p className="mt-1.5 text-[11px] text-neutral-400">Contexto original: {c.contextLines.join(' / ')}</p>
                             <div className="mt-2 flex gap-1.5">

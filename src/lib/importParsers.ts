@@ -70,6 +70,10 @@ export interface PdfUnrecognizedCandidate {
   probableCounterparty?: string
   probableDocument?: string
   sourceFile?: string
+  /** Página do PDF onde a linha foi encontrada (1-based), quando o parser rastreia páginas. */
+  page?: number
+  /** Motivo pelo qual a linha não pôde virar lançamento com segurança. */
+  reason?: string
 }
 
 const SUPPORTED_EXTENSIONS: Record<string, ImportFileKind> = {
