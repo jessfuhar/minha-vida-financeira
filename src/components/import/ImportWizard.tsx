@@ -22,7 +22,7 @@ import { parsePdf } from '../../lib/importPdf'
 import { guessMapping, isMappingConfident, mappableFieldLabel, type MappableField } from '../../lib/importMapping'
 import { inferTransactionKind } from '../../lib/importKind'
 import { detectDuplicates } from '../../lib/importDedup'
-import { findMatchingRule } from '../../lib/importRules'
+import { buildHistorySuggestionIndex, suggestClassification } from '../../lib/importRules'
 import { findPartnerForNewRow } from '../../lib/transferDetection'
 import { formatCurrency, formatDate, parseCurrencyInput, isValidCurrencyInput } from '../../lib/format'
 import { transactionKindMeta } from '../../lib/transactionKind'
@@ -91,6 +91,10 @@ interface PreviewRow {
   costCenterId: string
   categoryId: string
   appliedRuleId?: string
+  /** De onde veio a sugestão automática de Centro de Custo/Categoria ainda vigente nesta linha —
+   * some assim que a usuária altera manualmente qualquer um dos dois campos (a escolha manual
+   * sempre prevalece e nunca é sobrescrita de volta pela sugestão). */
+  suggestionSource?: 'rule' | 'history'
   transferPartner?: Transaction
   transferConfirmed: boolean
   // Campos editáveis na prévia (a interpretação do PDF pode ser imperfeita) — inicializados a
@@ -178,10 +182,16 @@ export function ImportWizard({
 
     const dedup = detectDuplicates(taggedRows, accountId, transactions)
 
+    // Índice contraparte → Centro de Custo/Categoria a partir do histórico real de transações já
+    // classificadas — construído uma única vez para toda a prévia (nunca por linha), para a tabela
+    // continuar rápida mesmo com centenas de movimentações. Regra explícita salva sempre tem
+    // prioridade sobre esse histórico (ver `suggestClassification`).
+    const historyIndex = buildHistorySuggestionIndex(transactions)
+
     const preview: PreviewRow[] = taggedRows.map((row, i) => {
       const isValid = row.date !== null && row.amount !== null && row.direction !== null
       const { kind } = inferTransactionKind(row.friendlyDescription || row.description, row.direction)
-      const rule = row.counterparty ? findMatchingRule(row.counterparty, classificationRules) : undefined
+      const suggestion = row.counterparty ? suggestClassification(row.counterparty, classificationRules, historyIndex) : undefined
       const transferPartner =
         isValid && row.direction
           ? findPartnerForNewRow({ date: row.date as string, amount: row.amount as number, direction: row.direction, counterparty: row.counterparty }, accountId, transactions)
@@ -193,9 +203,10 @@ export function ImportWizard({
         isDuplicate: dedup[i].isPossibleDuplicate,
         duplicateReason: dedup[i].reason,
         isValid,
-        costCenterId: transferPartner ? '' : rule?.costCenterId ?? '',
-        categoryId: transferPartner ? '' : rule?.categoryId ?? '',
-        appliedRuleId: transferPartner ? undefined : rule?.id,
+        costCenterId: transferPartner ? '' : suggestion?.costCenterId ?? '',
+        categoryId: transferPartner ? '' : suggestion?.categoryId ?? '',
+        appliedRuleId: transferPartner ? undefined : suggestion?.ruleId,
+        suggestionSource: transferPartner ? undefined : suggestion?.source,
         transferPartner,
         transferConfirmed: false,
         editDate: row.date ?? '',
@@ -390,7 +401,10 @@ export function ImportWizard({
     setConfirming(true)
     try {
       selectedRows.forEach(({ r }) => {
-        if (r.appliedRuleId && !r.transferConfirmed) onRuleUsed?.(r.appliedRuleId)
+        // Só conta a regra como "usada" quando a sugestão dela permanece exatamente como aplicada —
+        // se a usuária alterou manualmente Centro de Custo/Categoria, a escolha manual prevalece e a
+        // regra original não foi, de fato, o que classificou esta movimentação.
+        if (r.appliedRuleId && r.suggestionSource === 'rule' && !r.transferConfirmed) onRuleUsed?.(r.appliedRuleId)
       })
       const created = await onConfirmImport(accountId, rowsToInsert)
 
@@ -822,18 +836,29 @@ export function ImportWizard({
                             {r.transferConfirmed ? (
                               <span className="text-[11px] text-neutral-400">—</span>
                             ) : (
-                              <Select
-                                value={r.costCenterId}
-                                onChange={(e) => updateRow(i, { costCenterId: e.target.value, categoryId: '' })}
-                                className="!py-1 !text-[11.5px]"
-                              >
-                                <option value="">Sem centro de custo</option>
-                                {costCenters.map((cc) => (
-                                  <option key={cc.id} value={cc.id}>
-                                    {cc.emoji} {cc.name}
-                                  </option>
-                                ))}
-                              </Select>
+                              <div className="space-y-1">
+                                <Select
+                                  value={r.costCenterId}
+                                  onChange={(e) => updateRow(i, { costCenterId: e.target.value, categoryId: '', suggestionSource: undefined })}
+                                  className="!py-1 !text-[11.5px]"
+                                >
+                                  <option value="">Sem centro de custo</option>
+                                  {costCenters.map((cc) => (
+                                    <option key={cc.id} value={cc.id}>
+                                      {cc.emoji} {cc.name}
+                                    </option>
+                                  ))}
+                                </Select>
+                                {r.suggestionSource && (
+                                  <p
+                                    className="flex items-center gap-1 text-[10.5px] font-medium"
+                                    style={{ color: 'var(--color-status-good)' }}
+                                    title={r.suggestionSource === 'rule' ? 'Sugerido a partir de uma regra de classificação salva' : 'Sugerido a partir do histórico de classificações anteriores desta contraparte'}
+                                  >
+                                    <Sparkles size={10} /> sugerido
+                                  </p>
+                                )}
+                              </div>
                             )}
                           </td>
                           <td className="min-w-[170px] px-3 py-2">
@@ -843,7 +868,7 @@ export function ImportWizard({
                               <div className="space-y-1">
                                 <Select
                                   value={r.categoryId}
-                                  onChange={(e) => updateRow(i, { categoryId: e.target.value })}
+                                  onChange={(e) => updateRow(i, { categoryId: e.target.value, suggestionSource: undefined })}
                                   disabled={!selectedCc}
                                   className="!py-1 !text-[11.5px]"
                                 >
@@ -854,9 +879,13 @@ export function ImportWizard({
                                     </option>
                                   ))}
                                 </Select>
-                                {r.appliedRuleId && (
-                                  <p className="flex items-center gap-1 text-[10.5px] font-medium" style={{ color: 'var(--color-status-good)' }}>
-                                    <Sparkles size={10} /> Baseado em classificação anterior
+                                {r.suggestionSource && (
+                                  <p
+                                    className="flex items-center gap-1 text-[10.5px] font-medium"
+                                    style={{ color: 'var(--color-status-good)' }}
+                                    title={r.suggestionSource === 'rule' ? 'Sugerido a partir de uma regra de classificação salva' : 'Sugerido a partir do histórico de classificações anteriores desta contraparte'}
+                                  >
+                                    <Sparkles size={10} /> sugerido
                                   </p>
                                 )}
                               </div>

@@ -266,8 +266,10 @@ export default function CashFlow() {
         direction: r.direction,
         amount: r.amount,
         accountId: importAccountId,
-        costCenterId: r.categoryId ? r.costCenterId ?? null : null,
-        categoryId: r.categoryId ?? null,
+        // Um lançamento pode ter Centro de Custo sem Categoria (ex.: "Casa" sem categoria específica
+        // ainda escolhida) — nunca descartar o Centro de Custo só porque a Categoria ficou vazia.
+        costCenterId: r.costCenterId || null,
+        categoryId: r.categoryId || null,
         source: 'importado' as const,
       })),
     )
