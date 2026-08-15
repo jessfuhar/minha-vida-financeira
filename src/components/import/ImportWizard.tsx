@@ -24,6 +24,7 @@ import { inferTransactionKind } from '../../lib/importKind'
 import { detectDuplicates } from '../../lib/importDedup'
 import { buildHistorySuggestionIndex, suggestClassification } from '../../lib/importRules'
 import { findPartnerForNewRow } from '../../lib/transferDetection'
+import { monthKey, monthLabelLong } from '../../lib/aggregations'
 import { formatCurrency, formatDate, parseCurrencyInput, isValidCurrencyInput } from '../../lib/format'
 import { transactionKindMeta } from '../../lib/transactionKind'
 
@@ -379,6 +380,19 @@ export function ImportWizard({
     const selected = Object.values(included).filter(Boolean).length
     return { total, entradas, saidas, duplicates, invalid, withTransferSuggestion, selected }
   }, [previewRows, included])
+
+  // Resumo por mês/ano — cada linha usa SEMPRE a própria data (nunca o período selecionado na tela,
+  // a data de importação ou a de hoje), só para dar uma visão rápida da distribuição do extrato;
+  // não afeta em nada como os lançamentos são de fato gravados.
+  const monthBreakdown = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const r of previewRows) {
+      if (!r.editDate) continue
+      const key = monthKey(r.editDate)
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b))
+  }, [previewRows])
 
   const handleConfirm = async () => {
     const selectedRows = previewRows.map((r, i) => ({ r, i })).filter(({ i }) => included[i]).filter(({ r }) => r.isValid)
@@ -744,6 +758,16 @@ export function ImportWizard({
                   {summary.withTransferSuggestion > 0 && ` · ${summary.withTransferSuggestion} possível${summary.withTransferSuggestion === 1 ? '' : 'is'} transferência${summary.withTransferSuggestion === 1 ? '' : 's'} entre contas`}
                   {summary.invalid > 0 && ` · ${summary.invalid} com dados incompletos (não serão importados)`}
                 </div>
+
+                {monthBreakdown.length > 1 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {monthBreakdown.map(([key, count]) => (
+                      <span key={key} className="rounded-full bg-[var(--color-neutral-100)] px-2.5 py-1 text-[12px] text-neutral-600">
+                        {monthLabelLong(key).replace(' ', '/')}: {count} lançamento{count === 1 ? '' : 's'}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-[var(--border-hairline)]">
